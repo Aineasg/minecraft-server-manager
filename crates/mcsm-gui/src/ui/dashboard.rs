@@ -4,11 +4,12 @@
 use std::time::Duration;
 
 use adw::prelude::*;
+use mcsm_core::ops::backup;
 use mcsm_core::ops::server::{
     scope_active, stop_orphan_scope, ServerConfig, ServerEvent, ServerHandle, Status, SCOPE_UNIT,
 };
 use relm4::prelude::*;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::context::Context;
 use crate::ui::widgets::gib;
@@ -21,6 +22,13 @@ const MAX_RESTARTS: u32 = 3;
 enum Control {
     Console(String),
     Stop,
+    /// Flush the world and archive it from inside the task that owns the server
+    /// handle. Replies with the new backup's file name, or an error string.
+    Backup {
+        level: String,
+        auto: bool,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
 }
 
 pub struct DashboardPage {
@@ -56,11 +64,21 @@ pub enum DashboardInput {
     /// A server scope from outside this app was found on startup.
     OrphanDetected,
     OrphanStopped(Result<(), String>),
+    /// Take a manual world backup (routed here so it can flush a live server).
+    BackupNow,
+    /// The automatic-backup timer fired.
+    AutoBackup,
+    BackupFinished {
+        auto: bool,
+        result: Result<String, String>,
+    },
 }
 
 #[derive(Debug)]
 pub enum DashboardOutput {
     OpenSettings,
+    /// A backup was taken; the Backups page should refresh its list.
+    BackupsChanged,
 }
 
 #[relm4::component(pub)]
@@ -280,6 +298,26 @@ impl Component for DashboardPage {
                     Err(e) => self.append(&format!("[manager] Could not stop it: {e}\n")),
                 }
             }
+            DashboardInput::BackupNow => self.run_backup(false, &sender),
+            DashboardInput::AutoBackup => self.run_backup(true, &sender),
+            DashboardInput::BackupFinished { auto, result } => {
+                let kind = if auto { "Auto-backup" } else { "Backup" };
+                match &result {
+                    Ok(name) => self.append(&format!("[manager] {kind}: created {name}\n")),
+                    Err(e) => self.append(&format!("[manager] {kind} failed: {e}\n")),
+                }
+                if auto && result.is_ok() {
+                    let keep = self.ctx.state.borrow().auto_backup_keep as usize;
+                    match backup::prune_auto(&self.ctx.paths, keep) {
+                        Ok(n) if n > 0 => {
+                            self.append(&format!("[manager] Pruned {n} old auto-backup(s).\n"));
+                        }
+                        Err(e) => self.append(&format!("[manager] Auto-backup prune failed: {e}\n")),
+                        _ => {}
+                    }
+                }
+                let _ = sender.output(DashboardOutput::BackupsChanged);
+            }
         }
         self.scroll_console();
     }
@@ -432,9 +470,56 @@ impl DashboardPage {
         }
     }
 
+    /// Take a world backup. When a server is running this hands the job to the
+    /// supervisor task so it can `save-all flush` first; otherwise it archives
+    /// straight from disk. Either way the outcome comes back as
+    /// [`DashboardInput::BackupFinished`].
+    fn run_backup(&mut self, auto: bool, sender: &ComponentSender<Self>) {
+        let level = backup::level_name(&self.ctx.paths);
+        self.append(&format!(
+            "[manager] {} backup starting…\n",
+            if auto { "Automatic" } else { "Manual" }
+        ));
+
+        if let Some(control) = &self.control {
+            let control = control.clone();
+            let sender = sender.clone();
+            relm4::spawn(async move {
+                let (reply_tx, reply_rx) = oneshot::channel();
+                let sent = control
+                    .send(Control::Backup {
+                        level,
+                        auto,
+                        reply: reply_tx,
+                    })
+                    .await
+                    .is_ok();
+                let result = if sent {
+                    reply_rx
+                        .await
+                        .unwrap_or_else(|_| Err("backup task was dropped".into()))
+                } else {
+                    Err("server task is no longer running".into())
+                };
+                sender.input(DashboardInput::BackupFinished { auto, result });
+            });
+        } else {
+            let paths = self.ctx.paths.clone();
+            let sender = sender.clone();
+            relm4::spawn(async move {
+                let result = backup::create(&paths, &level, auto)
+                    .await
+                    .map(|entry| entry.file_name)
+                    .map_err(|e| e.to_string());
+                sender.input(DashboardInput::BackupFinished { auto, result });
+            });
+        }
+    }
+
     fn spawn_supervisor(&mut self, config: ServerConfig, sender: &ComponentSender<Self>) {
         let (control_tx, mut control_rx) = mpsc::channel::<Control>(32);
         self.control = Some(control_tx);
+        let paths = self.ctx.paths.clone();
 
         sender.command(move |out, shutdown| {
             shutdown.register(async move {
@@ -462,6 +547,15 @@ impl DashboardPage {
                                 let _ = handle.send_command(&line).await;
                             }
                             Some(Control::Stop) => handle.stop().await,
+                            Some(Control::Backup { level, auto, reply }) => {
+                                let _ = handle.send_command("save-all flush").await;
+                                tokio::time::sleep(Duration::from_secs(2)).await;
+                                let r = backup::create(&paths, &level, auto)
+                                    .await
+                                    .map(|entry| entry.file_name)
+                                    .map_err(|e| e.to_string());
+                                let _ = reply.send(r);
+                            }
                             None => {}
                         },
                     }

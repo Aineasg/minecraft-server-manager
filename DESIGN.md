@@ -122,6 +122,14 @@ Mojang piston manifest and is SHA-1 verified. Both are cached by name under
 siblings if a setup keeps them separate). Restore moves the live world aside to
 `<name>.pre-restore` first, and refuses to run while the server scope is active.
 
+Creating a backup (manual button or the auto timer) is routed through the
+Dashboard's live server handle: if the server is running it sends `save-all
+flush` and waits ~2 s before archiving, so the snapshot is consistent without a
+`save-off`. Automatic backups get an `auto-world-…` filename; `prune_auto` keeps
+the newest N of those (configurable: 3/5/10/25/50/all) and never touches a
+manual `world-…` archive. The timer lives on the Backups page and only runs
+while the app is open — it is not a background daemon.
+
 ## GUI (`mcsm-gui`)
 
 Relm4 (Elm-style) over gtk4-rs + libadwaita. `adw::NavigationSplitView` with a
@@ -140,6 +148,6 @@ imperatively and rebuild on change — simpler here than a factory.
 ## Deliberately out of scope for v1
 
 - Multiple server instances (single server, by request).
-- Scheduled backups (the module is structured to allow a timer later).
+- Background/daemon backups (the auto-backup timer runs only while the app is open).
 - CurseForge (Modrinth only — clean API, no auth).
 - Syntax highlighting in the raw file editor (plain monospace `TextView`).

@@ -45,6 +45,13 @@ pub struct AppState {
     /// Restart the server automatically if it exits unexpectedly (never after
     /// an out-of-memory kill).
     pub auto_restart: bool,
+
+    /// Take a world backup automatically every this many minutes while the app
+    /// is open. `0` disables it.
+    pub auto_backup_minutes: u64,
+    /// How many automatic backups to keep; the oldest beyond this are pruned.
+    /// `0` keeps them all.
+    pub auto_backup_keep: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -91,6 +98,8 @@ impl Default for AppState {
             gc_preset: GcPreset::default(),
             extra_jvm_args: Vec::new(),
             auto_restart: true,
+            auto_backup_minutes: 0,
+            auto_backup_keep: 10,
         }
     }
 }

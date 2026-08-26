@@ -6,8 +6,8 @@ use relm4::prelude::*;
 
 use crate::context::Context;
 use crate::ui::access_page::{AccessInput, AccessPage};
-use crate::ui::backups_page::{BackupsInput, BackupsPage};
-use crate::ui::dashboard::{DashboardOutput, DashboardPage, DashboardInput};
+use crate::ui::backups_page::{BackupsInput, BackupsOutput, BackupsPage};
+use crate::ui::dashboard::{DashboardInput, DashboardOutput, DashboardPage};
 use crate::ui::files_page::{FilesInput, FilesPage};
 use crate::ui::mods_page::{ModsInput, ModsPage};
 use crate::ui::properties_page::{PropertiesInput, PropertiesPage};
@@ -47,6 +47,12 @@ pub enum AppMsg {
     ShowPage(i32),
     RefreshBanner,
     ReloadServerPages,
+    /// Backups page asked for a manual backup.
+    BackupNow,
+    /// Auto-backup timer fired.
+    AutoBackup,
+    /// A backup was taken; refresh the Backups list.
+    ReloadBackups,
 }
 
 #[relm4::component(pub)]
@@ -123,12 +129,19 @@ impl Component for App {
             .launch(ctx.clone())
             .forward(sender.input_sender(), |out| match out {
                 DashboardOutput::OpenSettings => AppMsg::ShowPage(SETTINGS_INDEX),
+                DashboardOutput::BackupsChanged => AppMsg::ReloadBackups,
             });
         let mods = ModsPage::builder().launch(ctx.clone()).detach();
         let properties = PropertiesPage::builder().launch(ctx.clone()).detach();
         let access = AccessPage::builder().launch(ctx.clone()).detach();
         let files = FilesPage::builder().launch(ctx.clone()).detach();
-        let backups = BackupsPage::builder().launch(ctx.clone()).detach();
+        let backups = BackupsPage::builder().launch(ctx.clone()).forward(
+            sender.input_sender(),
+            |out| match out {
+                BackupsOutput::BackupNowRequested => AppMsg::BackupNow,
+                BackupsOutput::AutoBackupDue => AppMsg::AutoBackup,
+            },
+        );
         let settings = SettingsPage::builder().launch(ctx.clone()).forward(
             sender.input_sender(),
             |out| match out {
@@ -202,6 +215,15 @@ impl Component for App {
                 let _ = self.access.sender().send(AccessInput::Reload);
                 let _ = self.backups.sender().send(BackupsInput::Reload);
                 let _ = self.files.sender().send(FilesInput::Reload);
+            }
+            AppMsg::BackupNow => {
+                let _ = self.dashboard.sender().send(DashboardInput::BackupNow);
+            }
+            AppMsg::AutoBackup => {
+                let _ = self.dashboard.sender().send(DashboardInput::AutoBackup);
+            }
+            AppMsg::ReloadBackups => {
+                let _ = self.backups.sender().send(BackupsInput::Reload);
             }
         }
     }

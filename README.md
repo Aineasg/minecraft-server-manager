@@ -18,7 +18,7 @@ minecraft-server-manager/
 │   ├── state.toml      app settings (human-editable)
 │   ├── server/         the server: jars, world, mods/, config/, *.json
 │   ├── cache/          downloaded jars, reused across reinstalls
-│   ├── backups/        world-YYYYMMDD-HHMMSS.tar.zst
+│   ├── backups/        world-… (manual) and auto-world-… (scheduled) .tar.zst
 │   └── logs/
 └── target/             Rust build output (git-ignored)
 ```
