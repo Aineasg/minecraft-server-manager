@@ -1,0 +1,33 @@
+[package]
+name = "mcsm-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core logic for the Minecraft Server Manager: paths, config, Fabric/Modrinth clients, server process control."
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+md-5.workspace = true
+hex.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

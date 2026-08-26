@@ -1,0 +1,6 @@
+# Rust build artifacts
+/target
+
+# Runtime data managed by the app: server jars, world, mods, backups, logs.
+# Everything the app writes lives under here so deleting the folder is a clean slate.
+/data

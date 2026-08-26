@@ -1,0 +1,29 @@
+[package]
+name = "mcsm-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GTK4/libadwaita desktop front-end for the Minecraft Server Manager."
+default-run = "mcsm"
+
+[[bin]]
+name = "mcsm"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+mcsm-core = { path = "../mcsm-core" }
+
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+
+relm4 = { version = "0.11", features = ["libadwaita"] }
+relm4-components = "0.11"
+gtk = { version = "0.11", package = "gtk4" }
+adw = { version = "0.9", package = "libadwaita", features = ["v1_5"] }

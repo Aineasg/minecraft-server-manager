@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = ["crates/mcsm-core", "crates/mcsm-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/aineasg/minecraft-server-manager"
+
+# Shared dependency versions. Each crate opts in with `<dep>.workspace = true`.
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "process",
+    "fs",
+    "io-util",
+    "time",
+    "sync",
+    "macros",
+] }
+# Keep reqwest's default TLS (system OpenSSL via native-tls) — it builds without
+# a C toolchain dance on Arch, which ships OpenSSL. Add only what we use on top.
+reqwest = { version = "0.13", features = ["json", "stream"] }
+futures-util = "0.3"
+sha2 = "0.11"
+sha1 = "0.11"
+md-5 = "0.11"
+hex = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# GTK is unusably slow when built without optimisation, and our own crates are
+# small, so optimise every dependency even in debug builds.
+[profile.dev.package."*"]
+opt-level = 2
