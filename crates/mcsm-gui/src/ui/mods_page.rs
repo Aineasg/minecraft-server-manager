@@ -215,12 +215,7 @@ impl Component for ModsPage {
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
-                            let r = async {
-                                mods::install_version(&ctx.http, &ctx.paths, &new_version).await?;
-                                mods::remove(&old)?;
-                                Ok::<_, mcsm_core::Error>(())
-                            }
-                            .await;
+                            let r = mods::update(&ctx.http, &ctx.paths, &old, &new_version).await;
                             let _ = out.send(ModsInput::TaskDone(
                                 r.map(|()| "Updated.".to_string())
                                     .map_err(|e| e.to_string()),

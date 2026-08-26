@@ -140,6 +140,33 @@ pub async fn install_version(
     Ok(Some(dest))
 }
 
+/// Replace an installed mod with a newer Modrinth [`Version`].
+///
+/// Installs the new jar, then deletes the old one **only if** the update landed
+/// under a different filename. When the new version keeps the same name,
+/// [`install_version`] has already overwritten it in place and deleting `old`
+/// would take the update with it. A no-op (`None` from `install_version`, i.e.
+/// the new content was already present) still removes the stale jar.
+pub async fn update(
+    http: &Http,
+    paths: &Paths,
+    old: &InstalledMod,
+    new_version: &Version,
+) -> Result<()> {
+    let installed = install_version(http, paths, new_version).await?;
+    if should_remove_old(installed.as_deref(), &old.path) {
+        remove(old)?;
+    }
+    Ok(())
+}
+
+/// Whether the previous jar at `old_path` should be deleted after an update
+/// installed to `new_path` (`None` = nothing was written because the content
+/// was already present).
+fn should_remove_old(new_path: Option<&std::path::Path>, old_path: &std::path::Path) -> bool {
+    new_path != Some(old_path)
+}
+
 /// Install a resolved dependency set. Returns the paths that were newly written.
 pub async fn apply_resolution(
     http: &Http,
@@ -269,5 +296,18 @@ mod tests {
         assert!(again.to_string_lossy().ends_with("gamma.jar"));
 
         std::fs::remove_dir_all(&paths.root).ok();
+    }
+
+    #[test]
+    fn update_keeps_old_jar_only_when_new_reused_its_path() {
+        let same = std::path::Path::new("/m/sodium.jar");
+        let other = std::path::Path::new("/m/sodium-0.6.jar");
+
+        // New version wrote a different filename: delete the old one.
+        assert!(should_remove_old(Some(other), same));
+        // New version overwrote the same file in place: keep it (it *is* the update).
+        assert!(!should_remove_old(Some(same), same));
+        // Nothing was written (content already present): still drop the stale jar.
+        assert!(should_remove_old(None, same));
     }
 }
