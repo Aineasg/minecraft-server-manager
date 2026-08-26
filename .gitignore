@@ -1,8 +1,10 @@
 # Rust build artifacts
 /target
 
-# Runtime data managed by the app: server jars, world, mods, backups, logs.
-# Everything the app writes lives under here so deleting the folder is a clean slate.
+# Runtime data written by the app when run from a checkout: server jars, the
+# world, mods, config, logs, state.toml. Ignored by git, but NOT disposable —
+# this is a live Minecraft world. Never `rm -rf data` or `git clean -fdx` here;
+# use MCSM_ROOT=$(mktemp -d) for a throwaway run. See CLAUDE.md.
 /data
 
 # Local editor / tooling state

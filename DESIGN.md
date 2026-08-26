@@ -50,6 +50,12 @@ the source tree; in every other case it sits directly in the resolved directory
 (`paths.data == paths.root`). `Paths::with_root` builds the first layout,
 `Paths::with_data_dir` the second.
 
+`./data/` is git-ignored but it is **live user data** — a Minecraft world plus
+the server jars, mods and `state.toml`. Nothing in the tooling, and no
+contributor or assistant, should ever `rm -rf data`, `git clean -fdx`, or bulk-
+overwrite it. A clean-slate run goes to a throwaway root
+(`MCSM_ROOT="$(mktemp -d)"`), never by clearing `data/`. See `CLAUDE.md`.
+
 **Backups are the one thing that leaves the folder.** `state.backup_dir` (an
 `Option`, pinned to the resolved default on first run so it is never forgotten)
 points at `~/Documents/Minecraft Server Manager Backups/` by default — chosen so

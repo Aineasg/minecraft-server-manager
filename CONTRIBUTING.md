@@ -14,6 +14,11 @@ You need GTK 4 + libadwaita development files, `pkg-config`, OpenSSL headers,
 `zstd`, and a recent Rust toolchain. `./install.sh` installs those for
 Arch / Debian / Fedora.
 
+> **`./data/` is a live Minecraft world, not scratch.** It is git-ignored but
+> holds the world, jars, mods and `state.toml` whenever you run from a checkout.
+> Never `rm -rf data` or `git clean -fdx` in this repo. For a clean-slate run,
+> point the app elsewhere: `MCSM_ROOT="$(mktemp -d)" cargo run -p mcsm-gui`.
+
 ## Before opening a PR
 
 ```sh
