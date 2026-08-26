@@ -71,9 +71,7 @@ impl Http {
         body: &B,
     ) -> Result<T> {
         with_retries(url, || async {
-            let resp = self
-                .send(service, self.client.post(url).json(body))
-                .await?;
+            let resp = self.send(service, self.client.post(url).json(body)).await?;
             let text = body_text(service, url, resp).await?;
             serde_json::from_str(&text).map_err(|source| Error::Json {
                 what: "API response",
@@ -116,7 +114,9 @@ impl Http {
                 url: url.to_string(),
                 source,
             })?;
-            file.write_all(&chunk).await.map_err(|e| Error::io(&tmp, e))?;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| Error::io(&tmp, e))?;
             downloaded += chunk.len() as u64;
             progress(downloaded, total);
         }
@@ -149,11 +149,7 @@ impl Http {
     }
 }
 
-async fn body_text(
-    service: &'static str,
-    url: &str,
-    resp: reqwest::Response,
-) -> Result<String> {
+async fn body_text(service: &'static str, url: &str, resp: reqwest::Response) -> Result<String> {
     resp.text().await.map_err(|source| Error::Http {
         url: format!("{service} {url}"),
         source,
@@ -188,9 +184,7 @@ where
 fn is_retriable(err: &Error) -> bool {
     match err {
         Error::Http { .. } => true,
-        Error::HttpStatus { status, .. } => {
-            *status == 429 || (500..=599).contains(status)
-        }
+        Error::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
         _ => false,
     }
 }

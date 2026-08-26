@@ -170,7 +170,10 @@ mod tests {
     #[test]
     fn offline_uuid_matches_known_java_output() {
         // Verified against `UUID.nameUUIDFromBytes("OfflinePlayer:Notch".getBytes())`.
-        assert_eq!(offline_uuid("Notch"), "b50ad385-829d-3141-a216-7e7d7539ba7f");
+        assert_eq!(
+            offline_uuid("Notch"),
+            "b50ad385-829d-3141-a216-7e7d7539ba7f"
+        );
         assert_eq!(offline_uuid("jeb_"), "a762f560-4fce-3236-812a-b80efff0b62b");
     }
 

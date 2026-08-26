@@ -1,0 +1,48 @@
+# Maintainer: aineasg <aineasg@gmail.com>
+pkgname=minecraft-server-manager
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native GTK4/libadwaita desktop app to run and manage a Fabric Minecraft server"
+arch=('x86_64' 'aarch64')
+url="https://github.com/aineasg/minecraft-server-manager"
+license=('AGPL-3.0-or-later')
+depends=('gtk4' 'libadwaita' 'openssl' 'zstd' 'tar')
+optdepends=('jre-openjdk: run the Minecraft server (Java 21 or newer)'
+            'systemd: hard memory-cap enforcement for the server process')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')  # run `updpkgsums` after tagging the release
+
+_appid=dev.aineasg.MinecraftServerManager
+
+prepare() {
+	cd "$pkgname-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+	cd "$pkgname-$pkgver"
+	export RUSTUP_TOOLCHAIN=stable
+	export CARGO_TARGET_DIR=target
+	cargo build --frozen --release -p mcsm-gui
+}
+
+check() {
+	cd "$pkgname-$pkgver"
+	cargo test --frozen --workspace
+}
+
+package() {
+	cd "$pkgname-$pkgver"
+	install -Dm755 target/release/mcsm "$pkgdir/usr/bin/mcsm"
+	install -Dm644 "packaging/$_appid.desktop" \
+		"$pkgdir/usr/share/applications/$_appid.desktop"
+	install -Dm644 "packaging/$_appid.svg" \
+		"$pkgdir/usr/share/icons/hicolor/scalable/apps/$_appid.svg"
+	for s in 16 24 32 48 64 128 256 512; do
+		install -Dm644 "packaging/icons/$s.png" \
+			"$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/$_appid.png"
+	done
+	install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

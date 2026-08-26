@@ -212,7 +212,8 @@ impl PropertiesPage {
         match level_dat::write(&self.ctx.paths, &self.world_level, &settings) {
             Ok(()) => {
                 self.world = Some(settings);
-                self.status = "Saved to level.dat — effective on the next server start.".to_string();
+                self.status =
+                    "Saved to level.dat — effective on the next server start.".to_string();
             }
             Err(e) => self.status = format!("level.dat write failed: {e}"),
         }
@@ -240,13 +241,16 @@ impl PropertiesPage {
         hardcore.set_active(w.hardcore);
         hardcore.set_sensitive(enabled);
         let s = sender.clone();
-        hardcore.connect_active_notify(move |r| s.input(PropertiesInput::SetHardcore(r.is_active())));
+        hardcore
+            .connect_active_notify(move |r| s.input(PropertiesInput::SetHardcore(r.is_active())));
         group.add(&hardcore);
         self.world_rows.push(hardcore.upcast::<gtk::Widget>());
 
         let difficulty = adw::ComboRow::new();
         difficulty.set_title("Difficulty (world)");
-        difficulty.set_subtitle("server.properties `difficulty` overrides this on start — keep them in sync.");
+        difficulty.set_subtitle(
+            "server.properties `difficulty` overrides this on start — keep them in sync.",
+        );
         difficulty.set_model(Some(&gtk::StringList::new(&DIFFICULTIES)));
         difficulty.set_selected(u32::from(w.difficulty.min(3)));
         difficulty.set_sensitive(enabled);
@@ -259,7 +263,9 @@ impl PropertiesPage {
 
         let lock = adw::SwitchRow::new();
         lock.set_title("Lock difficulty");
-        lock.set_subtitle("Players cannot change difficulty in-game. Not available in server.properties.");
+        lock.set_subtitle(
+            "Players cannot change difficulty in-game. Not available in server.properties.",
+        );
         lock.set_active(w.difficulty_locked);
         lock.set_sensitive(enabled);
         let s = sender.clone();
@@ -381,7 +387,9 @@ impl PropertiesPage {
 
         let group = adw::PreferencesGroup::new();
         group.set_title("Other keys");
-        group.set_description(Some("Keys not covered by the form above (mod configs, custom entries)."));
+        group.set_description(Some(
+            "Keys not covered by the form above (mod configs, custom entries).",
+        ));
         for (key, value) in unknown {
             let row = adw::EntryRow::new();
             row.set_title(&key);

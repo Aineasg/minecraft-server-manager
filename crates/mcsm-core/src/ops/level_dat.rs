@@ -148,8 +148,14 @@ mod tests {
 
     fn make_level_dat(paths: &Paths, level: &str, settings: WorldSettings) {
         let mut data = HashMap::new();
-        data.insert("hardcore".to_string(), Value::Byte(i8::from(settings.hardcore)));
-        data.insert("Difficulty".to_string(), Value::Byte(settings.difficulty as i8));
+        data.insert(
+            "hardcore".to_string(),
+            Value::Byte(i8::from(settings.hardcore)),
+        );
+        data.insert(
+            "Difficulty".to_string(),
+            Value::Byte(settings.difficulty as i8),
+        );
         data.insert(
             "DifficultyLocked".to_string(),
             Value::Byte(i8::from(settings.difficulty_locked)),
@@ -193,7 +199,11 @@ mod tests {
         make_level_dat(
             &paths,
             "world",
-            WorldSettings { hardcore: false, difficulty: 1, difficulty_locked: false },
+            WorldSettings {
+                hardcore: false,
+                difficulty: 1,
+                difficulty_locked: false,
+            },
         );
 
         let before = read(&paths, "world").unwrap().unwrap();
@@ -203,7 +213,11 @@ mod tests {
         write(
             &paths,
             "world",
-            &WorldSettings { hardcore: true, difficulty: 3, difficulty_locked: true },
+            &WorldSettings {
+                hardcore: true,
+                difficulty: 3,
+                difficulty_locked: true,
+            },
         )
         .unwrap();
 
@@ -214,12 +228,16 @@ mod tests {
 
         // Other keys are preserved and a backup was made.
         assert!(paths.server.join("world").join("level.dat.bak").is_file());
-        let raw = read_nbt(&paths.server.join("world").join("level.dat")).unwrap().unwrap();
+        let raw = read_nbt(&paths.server.join("world").join("level.dat"))
+            .unwrap()
+            .unwrap();
         // Valid NBT root framing the vanilla server expects: TAG_Compound (0x0a).
         assert_eq!(raw.first(), Some(&0x0a));
         let root: Value = fastnbt::from_bytes(&raw).unwrap();
         let Value::Compound(map) = root else { panic!() };
-        let Some(Value::Compound(data)) = map.get("Data") else { panic!() };
+        let Some(Value::Compound(data)) = map.get("Data") else {
+            panic!()
+        };
         assert!(matches!(data.get("LevelName"), Some(Value::String(s)) if s == "world"));
 
         std::fs::remove_dir_all(&paths.root).ok();
@@ -231,7 +249,11 @@ mod tests {
         let err = write(
             &paths,
             "world",
-            &WorldSettings { hardcore: true, difficulty: 2, difficulty_locked: false },
+            &WorldSettings {
+                hardcore: true,
+                difficulty: 2,
+                difficulty_locked: false,
+            },
         )
         .unwrap_err();
         assert!(err.to_string().contains("no level.dat"));

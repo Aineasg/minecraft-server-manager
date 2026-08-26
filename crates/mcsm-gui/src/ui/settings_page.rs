@@ -356,8 +356,11 @@ impl Component for SettingsPage {
                 let _ = self.ctx.save_state();
             }
             SettingsInput::GcSelected(idx) => {
-                self.ctx.state.borrow_mut().gc_preset =
-                    if idx == 0 { GcPreset::Aikar } else { GcPreset::Basic };
+                self.ctx.state.borrow_mut().gc_preset = if idx == 0 {
+                    GcPreset::Aikar
+                } else {
+                    GcPreset::Basic
+                };
                 let _ = self.ctx.save_state();
             }
             SettingsInput::TotalCeilingChanged(gib_value) => {
@@ -399,7 +402,10 @@ impl Component for SettingsPage {
                 }
                 self.ctx.state.borrow_mut().backup_dir = new;
                 let _ = self.ctx.save_state();
-                self.status_line = format!("Backups will be saved to {}", self.ctx.backup_dir().display());
+                self.status_line = format!(
+                    "Backups will be saved to {}",
+                    self.ctx.backup_dir().display()
+                );
                 let _ = sender.output(SettingsOutput::BackupDirChanged);
             }
             SettingsInput::BrowseBackupDir => {
@@ -412,15 +418,11 @@ impl Component for SettingsPage {
                     dialog.set_initial_folder(Some(&gio::File::for_path(&start)));
                 }
                 let s = sender.clone();
-                dialog.select_folder(
-                    gtk::Window::NONE,
-                    gio::Cancellable::NONE,
-                    move |res| {
-                        if let Ok(Some(path)) = res.map(|f| f.path()) {
-                            s.input(SettingsInput::BackupDirEdited(path.display().to_string()));
-                        }
-                    },
-                );
+                dialog.select_folder(gtk::Window::NONE, gio::Cancellable::NONE, move |res| {
+                    if let Ok(Some(path)) = res.map(|f| f.path()) {
+                        s.input(SettingsInput::BackupDirEdited(path.display().to_string()));
+                    }
+                });
             }
             SettingsInput::Install => {
                 let (Some(mc), Some(loader), Some(installer)) = (
@@ -447,18 +449,20 @@ impl Component for SettingsPage {
                                 move |p: InstallProgress| {
                                     let line = match p {
                                         InstallProgress::Step(s) => s,
-                                        InstallProgress::Download { name, downloaded, total } => {
-                                            match total {
-                                                Some(t) if t > 0 => format!(
-                                                    "Downloading {name}: {}%",
-                                                    downloaded * 100 / t
-                                                ),
-                                                _ => format!(
-                                                    "Downloading {name}: {} KiB",
-                                                    downloaded / 1024
-                                                ),
-                                            }
-                                        }
+                                        InstallProgress::Download {
+                                            name,
+                                            downloaded,
+                                            total,
+                                        } => match total {
+                                            Some(t) if t > 0 => format!(
+                                                "Downloading {name}: {}%",
+                                                downloaded * 100 / t
+                                            ),
+                                            _ => format!(
+                                                "Downloading {name}: {} KiB",
+                                                downloaded / 1024
+                                            ),
+                                        },
                                     };
                                     let _ = out.send(SettingsInput::InstallProgress(line));
                                 }
@@ -566,12 +570,15 @@ impl SettingsPage {
         let body = format!(
             "# Managed by minecraft-server-manager\n# https://aka.ms/MinecraftEULA\neula={accepted}\n"
         );
-        let _ = mcsm_core::util::write_atomic(&self.ctx.paths.server_file("eula.txt"), body.as_bytes());
+        let _ =
+            mcsm_core::util::write_atomic(&self.ctx.paths.server_file("eula.txt"), body.as_bytes());
     }
 }
 
 async fn load_meta(http: &Http) -> Result<Meta, String> {
-    let game = fabric::game_versions(http).await.map_err(|e| e.to_string())?;
+    let game = fabric::game_versions(http)
+        .await
+        .map_err(|e| e.to_string())?;
     let loaders = fabric::loader_versions(http)
         .await
         .map_err(|e| e.to_string())?
@@ -599,7 +606,11 @@ fn string_list<S: AsRef<str>>(items: &[S]) -> gtk::StringList {
 
 /// Expand a leading `~` / `~/` to `$HOME` so hand-typed paths behave.
 fn expand_tilde(input: &str) -> PathBuf {
-    match (input.strip_prefix("~/"), input == "~", std::env::var_os("HOME")) {
+    match (
+        input.strip_prefix("~/"),
+        input == "~",
+        std::env::var_os("HOME"),
+    ) {
         (Some(rest), _, Some(home)) => PathBuf::from(home).join(rest),
         (_, true, Some(home)) => PathBuf::from(home),
         _ => PathBuf::from(input),

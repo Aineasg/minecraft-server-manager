@@ -57,7 +57,9 @@ pub enum Status {
 pub enum ServerEvent {
     /// Emitted once, immediately after a successful launch. `hard_cap` is false
     /// when we had to fall back to running without a systemd scope.
-    Launched { hard_cap: bool },
+    Launched {
+        hard_cap: bool,
+    },
     /// The process never started (bad `java`, refused scope, missing jar).
     /// Distinct from [`ServerEvent::Exited`] so the caller never treats a
     /// failed launch as a crash to auto-restart.
@@ -164,10 +166,7 @@ impl ServerHandle {
         tasks.push(tokio::spawn(pump_logs(stdout, stderr, events.clone())));
 
         if use_scope {
-            tasks.push(tokio::spawn(sample_memory(
-                config.budget,
-                events.clone(),
-            )));
+            tasks.push(tokio::spawn(sample_memory(config.budget, events.clone())));
         }
 
         tasks.push(tokio::spawn(supervise(
@@ -379,11 +378,13 @@ async fn supervise(
         }
     };
 
-    let oom_killed = if used_scope { scope_oom_killed().await } else { false };
+    let oom_killed = if used_scope {
+        scope_oom_killed().await
+    } else {
+        false
+    };
     let code = status.ok().and_then(|s| s.code());
-    let _ = events
-        .send(ServerEvent::Exited { code, oom_killed })
-        .await;
+    let _ = events.send(ServerEvent::Exited { code, oom_killed }).await;
     let final_status = if code == Some(0) {
         Status::Stopped
     } else {
@@ -481,7 +482,9 @@ mod tests {
         assert!(is_ready_line(
             "[12:00:00] [Server thread/INFO]: Done (11.417s)! For help, type \"help\""
         ));
-        assert!(!is_ready_line("[12:00:00] [Server thread/INFO]: Preparing spawn area: 74%"));
+        assert!(!is_ready_line(
+            "[12:00:00] [Server thread/INFO]: Preparing spawn area: 74%"
+        ));
     }
 
     #[test]

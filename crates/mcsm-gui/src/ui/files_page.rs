@@ -156,9 +156,9 @@ impl Component for FilesPage {
                 let Some(path) = self.selected.clone() else {
                     return;
                 };
-                let text = self
-                    .buffer
-                    .text(&self.buffer.start_iter(), &self.buffer.end_iter(), false);
+                let text =
+                    self.buffer
+                        .text(&self.buffer.start_iter(), &self.buffer.end_iter(), false);
                 match write_atomic(&path, text.as_bytes()) {
                     Ok(()) => {
                         self.dirty = false;

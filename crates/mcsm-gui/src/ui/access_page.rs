@@ -49,7 +49,10 @@ pub enum AccessInput {
     AddIpBan(String),
     Remove(AccessFile, usize),
     /// Result of the running-state check for a queued action.
-    Apply { running: bool, action: AccessAction },
+    Apply {
+        running: bool,
+        action: AccessAction,
+    },
     ResolveOnline,
     ResolvedUuids(Vec<(String, String)>),
 }

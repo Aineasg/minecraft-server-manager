@@ -27,9 +27,16 @@ tokio = { version = "1", features = [
     "sync",
     "macros",
 ] }
-# Keep reqwest's default TLS (system OpenSSL via native-tls) — it builds without
-# a C toolchain dance on Arch, which ships OpenSSL. Add only what we use on top.
-reqwest = { version = "0.13", features = ["json", "stream"] }
+# Use system OpenSSL (native-tls): every distro ships libssl, and it avoids the
+# cmake + clang + aws-lc-rs build chain that the default rustls stack pulls in —
+# keeps the install script light across Arch / Debian / Fedora.
+reqwest = { version = "0.13", default-features = false, features = [
+    "charset",
+    "http2",
+    "json",
+    "stream",
+    "native-tls",
+] }
 futures-util = "0.3"
 sha2 = "0.11"
 sha1 = "0.11"

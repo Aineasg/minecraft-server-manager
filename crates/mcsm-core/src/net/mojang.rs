@@ -69,7 +69,9 @@ pub async fn server_download(
     version_id: &str,
 ) -> Result<ServerDownload> {
     let entry = manifest.find(version_id).ok_or_else(|| {
-        Error::msg(format!("Minecraft version `{version_id}` is not in the manifest"))
+        Error::msg(format!(
+            "Minecraft version `{version_id}` is not in the manifest"
+        ))
     })?;
     let doc: VersionDoc = http.get_json(SERVICE, &entry.url).await?;
     doc.downloads.server.ok_or_else(|| {

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a6f3a"/>
+      <stop offset="1" stop-color="#274d27"/>
+    </linearGradient>
+    <linearGradient id="top" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8bd450"/>
+      <stop offset="1" stop-color="#6fb63f"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded-square backdrop -->
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="none" stroke="#1c3a1c" stroke-width="2" opacity="0.6"/>
+
+  <!-- isometric block -->
+  <g stroke="#1c2a12" stroke-width="2.5" stroke-linejoin="round">
+    <!-- top (grass) -->
+    <path d="M64 26 L102 46 L64 66 L26 46 Z" fill="url(#top)"/>
+    <!-- left (dirt) -->
+    <path d="M26 46 L64 66 L64 104 L26 84 Z" fill="#7a5230"/>
+    <!-- right (dirt, shaded) -->
+    <path d="M102 46 L64 66 L64 104 L102 84 Z" fill="#5e3d22"/>
+  </g>
+
+  <!-- run / play glyph on the right face -->
+  <path d="M75 71 L93 81 L75 91 Z" fill="#f4e9c1" stroke="#1c2a12" stroke-width="2" stroke-linejoin="round"/>
+</svg>

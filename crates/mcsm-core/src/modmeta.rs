@@ -109,7 +109,9 @@ fn read_entry<R: std::io::Read + std::io::Seek>(
 
 /// Parse JSON, retrying once with `//` and `/* */` comments stripped — some
 /// `fabric.mod.json` files use them even though strict JSON forbids it.
-fn parse_lenient<T: for<'de> Deserialize<'de>>(text: &str) -> std::result::Result<T, serde_json::Error> {
+fn parse_lenient<T: for<'de> Deserialize<'de>>(
+    text: &str,
+) -> std::result::Result<T, serde_json::Error> {
     match serde_json::from_str(text) {
         Ok(v) => Ok(v),
         Err(_) => serde_json::from_str(&strip_json_comments(text)),

@@ -114,8 +114,7 @@ impl Version {
 
     #[must_use]
     pub fn supports(&self, mc: &str, loader: &str) -> bool {
-        self.game_versions.iter().any(|v| v == mc)
-            && self.loaders.iter().any(|l| l == loader)
+        self.game_versions.iter().any(|v| v == mc) && self.loaders.iter().any(|l| l == loader)
     }
 }
 
@@ -181,10 +180,7 @@ pub trait VersionResolver {
         loader: &str,
     ) -> impl std::future::Future<Output = Result<Vec<Version>>>;
 
-    fn get_version(
-        &self,
-        version_id: &str,
-    ) -> impl std::future::Future<Output = Result<Version>>;
+    fn get_version(&self, version_id: &str) -> impl std::future::Future<Output = Result<Version>>;
 }
 
 /// Pick the newest version compatible with `mc` + `loader`.
@@ -493,9 +489,18 @@ mod tests {
     #[test]
     fn choose_version_prefers_newest_compatible() {
         let vs = vec![
-            Version { date_published: "2024-01-01T00:00:00Z".into(), ..version("old", "p", &["1.21.4"], vec![]) },
-            Version { date_published: "2025-06-01T00:00:00Z".into(), ..version("new", "p", &["1.21.4"], vec![]) },
-            Version { date_published: "2025-09-01T00:00:00Z".into(), ..version("wrongmc", "p", &["1.20.1"], vec![]) },
+            Version {
+                date_published: "2024-01-01T00:00:00Z".into(),
+                ..version("old", "p", &["1.21.4"], vec![])
+            },
+            Version {
+                date_published: "2025-06-01T00:00:00Z".into(),
+                ..version("new", "p", &["1.21.4"], vec![])
+            },
+            Version {
+                date_published: "2025-09-01T00:00:00Z".into(),
+                ..version("wrongmc", "p", &["1.20.1"], vec![])
+            },
         ];
         assert_eq!(choose_version(&vs, "1.21.4", "fabric").unwrap().id, "new");
     }
@@ -504,15 +509,28 @@ mod tests {
     async fn resolves_required_chain_and_dedups_diamond() {
         // root -> a, b ; a -> c ; b -> c   (c must appear exactly once)
         let mut by_project = HashMap::new();
-        by_project.insert("a".to_string(), vec![version("a1", "a", &["1.21.4"], vec![req("c")])]);
-        by_project.insert("b".to_string(), vec![version("b1", "b", &["1.21.4"], vec![req("c")])]);
-        by_project.insert("c".to_string(), vec![version("c1", "c", &["1.21.4"], vec![])]);
+        by_project.insert(
+            "a".to_string(),
+            vec![version("a1", "a", &["1.21.4"], vec![req("c")])],
+        );
+        by_project.insert(
+            "b".to_string(),
+            vec![version("b1", "b", &["1.21.4"], vec![req("c")])],
+        );
+        by_project.insert(
+            "c".to_string(),
+            vec![version("c1", "c", &["1.21.4"], vec![])],
+        );
         let resolver = MapResolver { by_project };
 
         let root = version("root1", "root", &["1.21.4"], vec![req("a"), req("b")]);
         let res = resolve(&resolver, root, "1.21.4", "fabric").await.unwrap();
 
-        let projects: Vec<&str> = res.to_install.iter().map(|v| v.project_id.as_str()).collect();
+        let projects: Vec<&str> = res
+            .to_install
+            .iter()
+            .map(|v| v.project_id.as_str())
+            .collect();
         assert_eq!(projects[0], "root");
         assert_eq!(res.to_install.len(), 4, "root + a + b + c, c only once");
         assert_eq!(projects.iter().filter(|p| **p == "c").count(), 1);
@@ -520,15 +538,26 @@ mod tests {
 
     #[tokio::test]
     async fn records_optional_and_incompatible_without_following_them() {
-        let resolver = MapResolver { by_project: HashMap::new() };
+        let resolver = MapResolver {
+            by_project: HashMap::new(),
+        };
         let root = version(
             "r1",
             "root",
             &["1.21.4"],
             vec![
-                Dependency { dependency_type: DependencyType::Optional, ..req("nice-to-have") },
-                Dependency { dependency_type: DependencyType::Incompatible, ..req("conflicts") },
-                Dependency { dependency_type: DependencyType::Embedded, ..req("bundled") },
+                Dependency {
+                    dependency_type: DependencyType::Optional,
+                    ..req("nice-to-have")
+                },
+                Dependency {
+                    dependency_type: DependencyType::Incompatible,
+                    ..req("conflicts")
+                },
+                Dependency {
+                    dependency_type: DependencyType::Embedded,
+                    ..req("bundled")
+                },
             ],
         );
         let res = resolve(&resolver, root, "1.21.4", "fabric").await.unwrap();
@@ -539,9 +568,13 @@ mod tests {
 
     #[tokio::test]
     async fn missing_required_build_is_an_error() {
-        let resolver = MapResolver { by_project: HashMap::new() };
+        let resolver = MapResolver {
+            by_project: HashMap::new(),
+        };
         let root = version("r1", "root", &["1.21.4"], vec![req("gone")]);
-        let err = resolve(&resolver, root, "1.21.4", "fabric").await.unwrap_err();
+        let err = resolve(&resolver, root, "1.21.4", "fabric")
+            .await
+            .unwrap_err();
         assert!(matches!(err, Error::Dependency(_)));
     }
 

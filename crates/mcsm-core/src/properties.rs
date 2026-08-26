@@ -196,7 +196,8 @@ impl Properties {
     /// Remove `key` entirely (its line disappears). Returns whether it existed.
     pub fn remove(&mut self, key: &str) -> bool {
         let before = self.lines.len();
-        self.lines.retain(|line| !matches!(&line.kind, LineKind::Entry(e) if e.key == key));
+        self.lines
+            .retain(|line| !matches!(&line.kind, LineKind::Entry(e) if e.key == key));
         self.lines.len() != before
     }
 
@@ -424,7 +425,10 @@ online-mode=true
 
         let mut p2 = Properties::parse("resource-pack=\n");
         p2.set("resource-pack", "https://example.com/pack.zip");
-        assert_eq!(p2.render(), "resource-pack=https\\://example.com/pack.zip\n");
+        assert_eq!(
+            p2.render(),
+            "resource-pack=https\\://example.com/pack.zip\n"
+        );
     }
 
     #[test]

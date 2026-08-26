@@ -158,7 +158,8 @@ impl Component for BackupsPage {
                 if self.pending_restore != Some(idx) {
                     self.pending_restore = Some(idx);
                     self.status =
-                        "Click Restore again to confirm — this replaces the current world.".to_string();
+                        "Click Restore again to confirm — this replaces the current world."
+                            .to_string();
                     self.rebuild(&sender);
                     return;
                 }
@@ -294,7 +295,8 @@ impl BackupsPage {
                 .unwrap_or(0) as u32,
         );
         let s = sender.clone();
-        interval_row.connect_selected_notify(move |r| s.input(BackupsInput::SetInterval(r.selected())));
+        interval_row
+            .connect_selected_notify(move |r| s.input(BackupsInput::SetInterval(r.selected())));
         group.add(&interval_row);
 
         let keep_labels: Vec<&str> = KEEP_CHOICES.iter().map(|(l, _)| *l).collect();
@@ -330,7 +332,11 @@ impl BackupsPage {
         for (idx, entry) in self.entries.iter().enumerate() {
             let row = adw::ActionRow::new();
             row.set_title(&entry.file_name);
-            let tag = if entry.is_automatic() { "automatic · " } else { "" };
+            let tag = if entry.is_automatic() {
+                "automatic · "
+            } else {
+                ""
+            };
             row.set_subtitle(&format!("{tag}{}", human_bytes(entry.size_bytes)));
 
             let restore = gtk::Button::with_label(if self.pending_restore == Some(idx) {

@@ -188,7 +188,8 @@ pub async fn check_updates(
     let hashes: Vec<String> = installed.iter().map(|m| m.sha512.clone()).collect();
     let mut latest = modrinth.check_updates(&hashes, mc, loader).await?;
     // Drop entries that resolve to the file we already have.
-    let have: std::collections::HashSet<&str> = installed.iter().map(|m| m.sha512.as_str()).collect();
+    let have: std::collections::HashSet<&str> =
+        installed.iter().map(|m| m.sha512.as_str()).collect();
     latest.retain(|_, v| {
         v.primary_file()
             .map(|f| !have.contains(f.hashes.sha512.as_str()))
@@ -209,7 +210,11 @@ mod tests {
         let mut zip = zip::ZipWriter::new(file);
         zip.start_file::<_, ()>("fabric.mod.json", zip::write::FileOptions::default())
             .unwrap();
-        write!(zip, r#"{{"id":"{mod_id}","name":"{mod_id}","version":"1.0.0"}}"#).unwrap();
+        write!(
+            zip,
+            r#"{{"id":"{mod_id}","name":"{mod_id}","version":"1.0.0"}}"#
+        )
+        .unwrap();
         zip.finish().unwrap();
     }
 

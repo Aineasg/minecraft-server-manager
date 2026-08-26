@@ -36,7 +36,8 @@ pub struct InstallerVersion {
 
 /// All Minecraft versions, newest first.
 pub async fn game_versions(http: &Http) -> Result<Vec<GameVersion>> {
-    http.get_json(SERVICE, &format!("{BASE}/versions/game")).await
+    http.get_json(SERVICE, &format!("{BASE}/versions/game"))
+        .await
 }
 
 /// All loader versions, newest first.
@@ -53,7 +54,11 @@ pub async fn installer_versions(http: &Http) -> Result<Vec<InstallerVersion>> {
 
 /// The newest loader version marked stable.
 pub async fn latest_stable_loader(http: &Http) -> Result<String> {
-    first_stable(loader_versions(http).await?, |v| (v.version, v.stable), "loader")
+    first_stable(
+        loader_versions(http).await?,
+        |v| (v.version, v.stable),
+        "loader",
+    )
 }
 
 /// The newest installer version marked stable.
@@ -98,9 +103,18 @@ mod tests {
     #[test]
     fn picks_first_stable_entry() {
         let loaders = vec![
-            LoaderVersion { version: "0.17.0-beta".into(), stable: false },
-            LoaderVersion { version: "0.16.9".into(), stable: true },
-            LoaderVersion { version: "0.16.8".into(), stable: true },
+            LoaderVersion {
+                version: "0.17.0-beta".into(),
+                stable: false,
+            },
+            LoaderVersion {
+                version: "0.16.9".into(),
+                stable: true,
+            },
+            LoaderVersion {
+                version: "0.16.8".into(),
+                stable: true,
+            },
         ];
         let got = first_stable(loaders, |v| (v.version, v.stable), "loader").unwrap();
         assert_eq!(got, "0.16.9");

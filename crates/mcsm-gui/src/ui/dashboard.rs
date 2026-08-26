@@ -298,16 +298,14 @@ impl Component for DashboardPage {
                      Live console and memory are unavailable for it; use “Stop external” to shut it down.\n"
                 ));
             }
-            DashboardInput::OrphanStopped(result) => {
-                match result {
-                    Ok(()) => {
-                        self.orphan = false;
-                        self.status = Status::Stopped;
-                        self.append("[manager] External server stopped.\n");
-                    }
-                    Err(e) => self.append(&format!("[manager] Could not stop it: {e}\n")),
+            DashboardInput::OrphanStopped(result) => match result {
+                Ok(()) => {
+                    self.orphan = false;
+                    self.status = Status::Stopped;
+                    self.append("[manager] External server stopped.\n");
                 }
-            }
+                Err(e) => self.append(&format!("[manager] Could not stop it: {e}\n")),
+            },
             DashboardInput::BackupNow => self.run_backup(false, &sender),
             DashboardInput::AutoBackup => self.run_backup(true, &sender),
             DashboardInput::RunCommand(cmd) => {
@@ -332,7 +330,9 @@ impl Component for DashboardPage {
                         Ok(n) if n > 0 => {
                             self.append(&format!("[manager] Pruned {n} old auto-backup(s).\n"));
                         }
-                        Err(e) => self.append(&format!("[manager] Auto-backup prune failed: {e}\n")),
+                        Err(e) => {
+                            self.append(&format!("[manager] Auto-backup prune failed: {e}\n"))
+                        }
                         _ => {}
                     }
                 }
@@ -402,8 +402,8 @@ impl Component for DashboardPage {
                 }
 
                 let auto = self.ctx.state.borrow().auto_restart;
-                let want_restart = self.pending_restart
-                    || (!self.stopping && !clean && !oom_killed && auto);
+                let want_restart =
+                    self.pending_restart || (!self.stopping && !clean && !oom_killed && auto);
                 self.pending_restart = false;
 
                 if want_restart && self.restart_count < MAX_RESTARTS {
@@ -544,47 +544,48 @@ impl DashboardPage {
         let paths = self.ctx.paths.clone();
 
         sender.command(move |out, shutdown| {
-            shutdown.register(async move {
-                let (evt_tx, mut evt_rx) = mpsc::channel::<ServerEvent>(256);
-                let (handle, _outcome) = match ServerHandle::start(config, evt_tx).await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let _ = out.send(ServerEvent::LaunchFailed(e.to_string()));
-                        return;
-                    }
-                };
+            shutdown
+                .register(async move {
+                    let (evt_tx, mut evt_rx) = mpsc::channel::<ServerEvent>(256);
+                    let (handle, _outcome) = match ServerHandle::start(config, evt_tx).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let _ = out.send(ServerEvent::LaunchFailed(e.to_string()));
+                            return;
+                        }
+                    };
 
-                loop {
-                    tokio::select! {
-                        maybe_ev = evt_rx.recv() => match maybe_ev {
-                            Some(ev) => {
-                                if out.send(ev).is_err() {
-                                    break;
+                    loop {
+                        tokio::select! {
+                            maybe_ev = evt_rx.recv() => match maybe_ev {
+                                Some(ev) => {
+                                    if out.send(ev).is_err() {
+                                        break;
+                                    }
                                 }
-                            }
-                            None => break,
-                        },
-                        maybe_ctl = control_rx.recv() => match maybe_ctl {
-                            Some(Control::Console(line)) => {
-                                let _ = handle.send_command(&line).await;
-                            }
-                            Some(Control::Stop) => handle.stop().await,
-                            Some(Control::Backup { level, backup_dir, auto, reply }) => {
-                                let _ = handle.send_command("save-all flush").await;
-                                tokio::time::sleep(Duration::from_secs(2)).await;
-                                let r = backup::create(&paths, &backup_dir, &level, auto)
-                                    .await
-                                    .map(|entry| entry.file_name)
-                                    .map_err(|e| e.to_string());
-                                let _ = reply.send(r);
-                            }
-                            None => {}
-                        },
+                                None => break,
+                            },
+                            maybe_ctl = control_rx.recv() => match maybe_ctl {
+                                Some(Control::Console(line)) => {
+                                    let _ = handle.send_command(&line).await;
+                                }
+                                Some(Control::Stop) => handle.stop().await,
+                                Some(Control::Backup { level, backup_dir, auto, reply }) => {
+                                    let _ = handle.send_command("save-all flush").await;
+                                    tokio::time::sleep(Duration::from_secs(2)).await;
+                                    let r = backup::create(&paths, &backup_dir, &level, auto)
+                                        .await
+                                        .map(|entry| entry.file_name)
+                                        .map_err(|e| e.to_string());
+                                    let _ = reply.send(r);
+                                }
+                                None => {}
+                            },
+                        }
                     }
-                }
-                drop(handle);
-            })
-            .drop_on_shutdown()
+                    drop(handle);
+                })
+                .drop_on_shutdown()
         });
     }
 }

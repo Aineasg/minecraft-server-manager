@@ -17,7 +17,8 @@ const APP_ID: &str = "dev.aineasg.MinecraftServerManager";
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_env("MCSM_LOG").unwrap_or_else(|_| EnvFilter::new("info,mcsm=debug")),
+            EnvFilter::try_from_env("MCSM_LOG")
+                .unwrap_or_else(|_| EnvFilter::new("info,mcsm=debug")),
         )
         .init();
 

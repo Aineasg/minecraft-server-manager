@@ -152,7 +152,8 @@ impl Component for ModsPage {
                             .await;
                             let msg = result
                                 .map(|r| {
-                                    let mut s = format!("Installed {} file(s).", r.to_install.len());
+                                    let mut s =
+                                        format!("Installed {} file(s).", r.to_install.len());
                                     if !r.incompatible.is_empty() {
                                         s.push_str(&format!(
                                             " Warning: {} incompatible project(s) flagged.",
@@ -221,7 +222,8 @@ impl Component for ModsPage {
                             }
                             .await;
                             let _ = out.send(ModsInput::TaskDone(
-                                r.map(|()| "Updated.".to_string()).map_err(|e| e.to_string()),
+                                r.map(|()| "Updated.".to_string())
+                                    .map_err(|e| e.to_string()),
                             ));
                         })
                         .drop_on_shutdown()
@@ -338,7 +340,9 @@ impl ModsPage {
         group.set_title(&format!("Installed ({})", self.installed.len()));
 
         if self.installed.is_empty() {
-            group.set_description(Some("Drop .jar files into data/server/mods, or install from search above."));
+            group.set_description(Some(
+                "Drop .jar files into data/server/mods, or install from search above.",
+            ));
         }
 
         for (idx, m) in self.installed.iter().enumerate() {
@@ -398,5 +402,7 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Escape `&`, `<`, `>` so Pango markup in row titles is treated literally.
 fn glib_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }

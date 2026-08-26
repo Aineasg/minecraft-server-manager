@@ -217,7 +217,10 @@ mod tests {
             loader_version: Some("0.16.9".into()),
             installer_version: Some("1.0.1".into()),
             eula_accepted: true,
-            memory: MemorySettings { total_mib: 8192, xmx_mib: None },
+            memory: MemorySettings {
+                total_mib: 8192,
+                xmx_mib: None,
+            },
             ..AppState::default()
         };
 

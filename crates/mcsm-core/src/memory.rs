@@ -165,9 +165,18 @@ mod tests {
 
     #[test]
     fn requested_heap_is_clamped_both_ways() {
-        assert_eq!(MemoryBudget::new(DEFAULT_TOTAL_MIB, Some(64_000)).xmx_mib, 5632);
-        assert_eq!(MemoryBudget::new(DEFAULT_TOTAL_MIB, Some(256)).xmx_mib, 1024);
-        assert_eq!(MemoryBudget::new(DEFAULT_TOTAL_MIB, Some(4096)).xmx_mib, 4096);
+        assert_eq!(
+            MemoryBudget::new(DEFAULT_TOTAL_MIB, Some(64_000)).xmx_mib,
+            5632
+        );
+        assert_eq!(
+            MemoryBudget::new(DEFAULT_TOTAL_MIB, Some(256)).xmx_mib,
+            1024
+        );
+        assert_eq!(
+            MemoryBudget::new(DEFAULT_TOTAL_MIB, Some(4096)).xmx_mib,
+            4096
+        );
     }
 
     #[test]

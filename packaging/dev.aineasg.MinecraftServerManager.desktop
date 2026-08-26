@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Minecraft Server Manager
+GenericName=Minecraft Server Manager
+Comment=Run and manage a Fabric Minecraft server: mods, config, backups
+Exec=mcsm
+Icon=dev.aineasg.MinecraftServerManager
+Terminal=false
+Categories=Game;
+Keywords=minecraft;fabric;server;mods;modrinth;
+StartupNotify=true
+StartupWMClass=dev.aineasg.MinecraftServerManager

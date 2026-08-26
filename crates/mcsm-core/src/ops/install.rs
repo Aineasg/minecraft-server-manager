@@ -66,7 +66,9 @@ pub async fn install(
     copy_into_place(&vanilla_cache, &paths.server_file("server.jar"))?;
 
     // --- Fabric launcher jar ---------------------------------------------------
-    progress(InstallProgress::Step("Downloading Fabric server launcher".into()));
+    progress(InstallProgress::Step(
+        "Downloading Fabric server launcher".into(),
+    ));
     let fabric_url = fabric::server_launcher_jar_url(
         &plan.minecraft_version,
         &plan.loader_version,
@@ -86,7 +88,10 @@ pub async fn install(
         &mut progress,
     )
     .await?;
-    copy_into_place(&fabric_cache, &paths.server_file("fabric-server-launch.jar"))?;
+    copy_into_place(
+        &fabric_cache,
+        &paths.server_file("fabric-server-launch.jar"),
+    )?;
 
     // --- eula.txt ------------------------------------------------------------
     progress(InstallProgress::Step("Writing eula.txt".into()));
@@ -110,7 +115,9 @@ async fn ensure_cached(
     progress: &mut impl FnMut(InstallProgress),
 ) -> Result<()> {
     if dest.is_file() && cache_is_valid(dest, verify) {
-        progress(InstallProgress::Step(format!("Using cached {display_name}")));
+        progress(InstallProgress::Step(format!(
+            "Using cached {display_name}"
+        )));
         return Ok(());
     }
 
@@ -136,7 +143,9 @@ async fn ensure_cached(
 fn cache_is_valid(path: &Path, verify: Option<(&str, u64)>) -> bool {
     let Some((expected_sha1, expected_size)) = verify else {
         // No checksum available (Fabric): treat a non-empty file as good enough.
-        return std::fs::metadata(path).map(|m| m.len() > 0).unwrap_or(false);
+        return std::fs::metadata(path)
+            .map(|m| m.len() > 0)
+            .unwrap_or(false);
     };
     let size_ok = std::fs::metadata(path)
         .map(|m| m.len() == expected_size)

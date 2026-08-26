@@ -15,13 +15,41 @@ use crate::ui::settings_page::{SettingsOutput, SettingsPage};
 
 /// `(stack id, sidebar label, hover description)` in sidebar order.
 const PAGES: [(&str, &str, &str); 7] = [
-    ("dashboard", "Dashboard", "Start, stop and restart the server, watch its memory, read the console and send commands"),
-    ("mods", "Mods", "Search Modrinth, install mods with their dependencies, enable/disable and update"),
-    ("properties", "Properties", "Edit server.properties as a form, plus world-only settings (hardcore) stored in level.dat"),
-    ("access", "Player access", "Operators, whitelist and bans — applied live when the server is running"),
-    ("files", "Files", "A plain-text editor for any file under the data folder"),
-    ("backups", "Backups", "Schedule automatic world backups, and create, restore or delete them"),
-    ("settings", "Settings", "Minecraft/Fabric version, memory budget, Java, EULA, backup folder"),
+    (
+        "dashboard",
+        "Dashboard",
+        "Start, stop and restart the server, watch its memory, read the console and send commands",
+    ),
+    (
+        "mods",
+        "Mods",
+        "Search Modrinth, install mods with their dependencies, enable/disable and update",
+    ),
+    (
+        "properties",
+        "Properties",
+        "Edit server.properties as a form, plus world-only settings (hardcore) stored in level.dat",
+    ),
+    (
+        "access",
+        "Player access",
+        "Operators, whitelist and bans — applied live when the server is running",
+    ),
+    (
+        "files",
+        "Files",
+        "A plain-text editor for any file under the data folder",
+    ),
+    (
+        "backups",
+        "Backups",
+        "Schedule automatic world backups, and create, restore or delete them",
+    ),
+    (
+        "settings",
+        "Settings",
+        "Minecraft/Fabric version, memory budget, Java, EULA, backup folder",
+    ),
 ];
 const SETTINGS_INDEX: i32 = 6;
 
@@ -135,12 +163,13 @@ impl Component for App {
     ) -> ComponentParts<Self> {
         let ctx = init.context;
 
-        let dashboard = DashboardPage::builder()
-            .launch(ctx.clone())
-            .forward(sender.input_sender(), |out| match out {
-                DashboardOutput::OpenSettings => AppMsg::ShowPage(SETTINGS_INDEX),
-                DashboardOutput::BackupsChanged => AppMsg::ReloadBackups,
-            });
+        let dashboard =
+            DashboardPage::builder()
+                .launch(ctx.clone())
+                .forward(sender.input_sender(), |out| match out {
+                    DashboardOutput::OpenSettings => AppMsg::ShowPage(SETTINGS_INDEX),
+                    DashboardOutput::BackupsChanged => AppMsg::ReloadBackups,
+                });
         let mods = ModsPage::builder().launch(ctx.clone()).detach();
         let properties = PropertiesPage::builder().launch(ctx.clone()).detach();
         let access = AccessPage::builder().launch(ctx.clone()).forward(
@@ -150,21 +179,21 @@ impl Component for App {
             },
         );
         let files = FilesPage::builder().launch(ctx.clone()).detach();
-        let backups = BackupsPage::builder().launch(ctx.clone()).forward(
-            sender.input_sender(),
-            |out| match out {
-                BackupsOutput::BackupNowRequested => AppMsg::BackupNow,
-                BackupsOutput::AutoBackupDue => AppMsg::AutoBackup,
-            },
-        );
-        let settings = SettingsPage::builder().launch(ctx.clone()).forward(
-            sender.input_sender(),
-            |out| match out {
-                SettingsOutput::Changed => AppMsg::RefreshBanner,
-                SettingsOutput::Installed => AppMsg::ReloadServerPages,
-                SettingsOutput::BackupDirChanged => AppMsg::ReloadBackups,
-            },
-        );
+        let backups =
+            BackupsPage::builder()
+                .launch(ctx.clone())
+                .forward(sender.input_sender(), |out| match out {
+                    BackupsOutput::BackupNowRequested => AppMsg::BackupNow,
+                    BackupsOutput::AutoBackupDue => AppMsg::AutoBackup,
+                });
+        let settings =
+            SettingsPage::builder()
+                .launch(ctx.clone())
+                .forward(sender.input_sender(), |out| match out {
+                    SettingsOutput::Changed => AppMsg::RefreshBanner,
+                    SettingsOutput::Installed => AppMsg::ReloadServerPages,
+                    SettingsOutput::BackupDirChanged => AppMsg::ReloadBackups,
+                });
 
         let stack = adw::ViewStack::new();
         let banner = adw::Banner::new("");
@@ -243,7 +272,10 @@ impl Component for App {
                 let _ = self.backups.sender().send(BackupsInput::Reload);
             }
             AppMsg::RunServerCommand(cmd) => {
-                let _ = self.dashboard.sender().send(DashboardInput::RunCommand(cmd));
+                let _ = self
+                    .dashboard
+                    .sender()
+                    .send(DashboardInput::RunCommand(cmd));
             }
             AppMsg::OpenDataFolder => {
                 let file = relm4::gtk::gio::File::for_path(&self.ctx.paths.data);

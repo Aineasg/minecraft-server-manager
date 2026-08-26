@@ -46,7 +46,11 @@ pub fn level_name(paths: &Paths) -> String {
     read_to_string_opt(&paths.server_file("server.properties"))
         .ok()
         .flatten()
-        .and_then(|text| Properties::parse(&text).get("level-name").map(str::to_string))
+        .and_then(|text| {
+            Properties::parse(&text)
+                .get("level-name")
+                .map(str::to_string)
+        })
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "world".to_string())
 }
@@ -247,7 +251,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!(
             "mcsm-bk-rt-{}-{}",
             std::process::id(),
-            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let paths = Paths::with_root(&root);
         paths.ensure_dirs().unwrap();
@@ -300,16 +307,32 @@ mod tests {
         paths.ensure_dirs().unwrap();
 
         for i in 0..5 {
-            touch_backup(&paths.backups, &format!("auto-world-2026010{}-000000.tar.zst", i + 1), i * 100);
+            touch_backup(
+                &paths.backups,
+                &format!("auto-world-2026010{}-000000.tar.zst", i + 1),
+                i * 100,
+            );
         }
         touch_backup(&paths.backups, "world-20260101-120000.tar.zst", 50);
 
         let removed = prune_auto(&paths.backups, 2).unwrap();
         assert_eq!(removed, 3);
 
-        let remaining: Vec<String> = list(&paths.backups).unwrap().into_iter().map(|e| e.file_name).collect();
-        assert_eq!(remaining.iter().filter(|n| n.starts_with("auto-world-")).count(), 2);
-        assert!(remaining.iter().any(|n| n == "world-20260101-120000.tar.zst"));
+        let remaining: Vec<String> = list(&paths.backups)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.file_name)
+            .collect();
+        assert_eq!(
+            remaining
+                .iter()
+                .filter(|n| n.starts_with("auto-world-"))
+                .count(),
+            2
+        );
+        assert!(remaining
+            .iter()
+            .any(|n| n == "world-20260101-120000.tar.zst"));
         // keep == 0 is a no-op
         assert_eq!(prune_auto(&paths.backups, 0).unwrap(), 0);
 

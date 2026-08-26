@@ -33,12 +33,37 @@ logic can be reasoned about without a display.
 
 `Paths` is the single source of truth. Root resolution order:
 
-1. `$MCSM_ROOT` if set.
-2. Walk up from the executable, then from the CWD, for a `Cargo.toml`
-   containing `mcsm` or a `.mcsm-root` marker.
-3. The directory containing the executable (shipped-binary fallback).
+1. `$MCSM_ROOT` if set (created if missing).
+2. **Portable mode** — walk up from the executable, then the CWD, for a
+   `Cargo.toml` containing `mcsm` or a `.mcsm-root` marker: a clone of the repo
+   run in place → `<repo>/data/`.
+3. **Installed mode** — none of the above, so the binary lives in `~/.local/bin`
+   or `/usr/bin` → `~/.local/share/MinecraftServerManager/`
+   (`$XDG_DATA_HOME`). Still one self-contained folder, just not next to the
+   binary.
+4. The directory containing the executable (last resort).
 
-Everything runtime lives under `<root>/data/`.
+Everything runtime lives under `<root>/` (`<root>/data/` in portable mode).
+
+**Backups are the one thing that leaves the folder.** `state.backup_dir` (an
+`Option`, pinned to the resolved default on first run so it is never forgotten)
+points at `~/Documents/Minecraft Server Manager Backups/` by default — chosen so
+that deleting or moving the app folder never loses a world. It is editable in
+Settings and falls back to `<root>/backups` when there is no `~/Documents`.
+
+## Packaging & install
+
+`install.sh` (repo root, POSIX `sh`) detects Arch / Debian / Fedora from
+`/etc/os-release`, installs the build + runtime dependencies via the native
+package manager (`sudo` only for that step), installs the Rust toolchain via
+`rustup` if `cargo` is absent, `cargo build --release`, then drops the binary,
+`.desktop` and hicolor icons into `~/.local`. `--uninstall` reverses it and
+never touches `<root>`. `packaging/PKGBUILD` is the AUR-style equivalent
+installing under `/usr`.
+
+reqwest is pinned to `native-tls` (system OpenSSL) rather than the default
+rustls + aws-lc-rs stack, so the build needs only a C compiler + `libssl` — no
+`cmake`/`clang` — which keeps the dependency list short on every distro.
 
 ## Server process supervision (`mcsm_core::ops::server`)
 
