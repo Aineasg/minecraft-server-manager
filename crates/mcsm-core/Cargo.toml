@@ -30,6 +30,7 @@ hex.workspace = true
 zip.workspace = true
 fastnbt.workspace = true
 flate2.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

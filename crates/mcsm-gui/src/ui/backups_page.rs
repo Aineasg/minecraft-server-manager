@@ -90,6 +90,7 @@ impl Component for BackupsPage {
                 },
                 pack_end = &gtk::Button {
                     set_label: "Back up world now",
+                    set_tooltip_text: Some("Flush a running server, then archive the world with tar + zstd"),
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: !model.busy,
@@ -237,7 +238,7 @@ impl Drop for BackupsPage {
 
 impl BackupsPage {
     fn reload(&mut self) {
-        self.entries = backup::list(&self.ctx.paths).unwrap_or_default();
+        self.entries = backup::list(&self.ctx.backup_dir()).unwrap_or_default();
         let total: u64 = self.entries.iter().map(|e| e.size_bytes).sum();
         let autos = self.entries.iter().filter(|e| e.is_automatic()).count();
         self.status = format!(
@@ -318,10 +319,13 @@ impl BackupsPage {
 
     fn add_list_group(&mut self, sender: &ComponentSender<Self>) {
         let group = adw::PreferencesGroup::new();
-        group.set_title("World backups (data/backups)");
-        if self.entries.is_empty() {
-            group.set_description(Some("No backups yet."));
-        }
+        group.set_title("World backups");
+        let dir = self.ctx.backup_dir();
+        group.set_description(Some(&if self.entries.is_empty() {
+            format!("No backups yet. Saved to {}", dir.display())
+        } else {
+            format!("Saved to {}", dir.display())
+        }));
 
         for (idx, entry) in self.entries.iter().enumerate() {
             let row = adw::ActionRow::new();

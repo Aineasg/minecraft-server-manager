@@ -6,7 +6,7 @@ members = ["crates/mcsm-core", "crates/mcsm-gui"]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/aineasg/minecraft-server-manager"
 
 # Shared dependency versions. Each crate opts in with `<dep>.workspace = true`.
@@ -38,6 +38,7 @@ hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 fastnbt = "2"
 flate2 = "1"
+dirs = "6"
 
 # GTK is unusably slow when built without optimisation, and our own crates are
 # small, so optimise every dependency even in debug builds.

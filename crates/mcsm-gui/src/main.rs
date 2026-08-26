@@ -30,8 +30,12 @@ fn main() -> anyhow::Result<()> {
 
     let state = AppState::load(&paths.state_file).context("loading state.toml")?;
     let context = Context::new(paths.clone(), state).context("initialising HTTP clients")?;
+    tracing::info!(backups = %context.backup_dir().display(), "backup folder");
 
     let app = RelmApp::new(APP_ID);
+    // Match the installed .desktop / hicolor icon so the window and taskbar
+    // show the app icon.
+    relm4::gtk::Window::set_default_icon_name(APP_ID);
     app.run::<App>(AppInit { context });
     Ok(())
 }

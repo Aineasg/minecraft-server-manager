@@ -52,6 +52,12 @@ pub struct AppState {
     /// How many automatic backups to keep; the oldest beyond this are pruned.
     /// `0` keeps them all.
     pub auto_backup_keep: u64,
+
+    /// Where world backups are written. `None` means "use the default"
+    /// (`~/Documents/Minecraft Server Manager Backups`). Stored explicitly once
+    /// resolved so the location is never forgotten, even if the app folder is
+    /// deleted and recreated elsewhere.
+    pub backup_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -100,6 +106,7 @@ impl Default for AppState {
             auto_restart: true,
             auto_backup_minutes: 0,
             auto_backup_keep: 10,
+            backup_dir: None,
         }
     }
 }
@@ -127,6 +134,14 @@ impl AppState {
     #[must_use]
     pub fn budget(&self) -> MemoryBudget {
         MemoryBudget::new(self.memory.total_mib, self.memory.xmx_mib)
+    }
+
+    /// Where backups are written: the explicit setting, or the default.
+    #[must_use]
+    pub fn backup_dir(&self, paths: &crate::Paths) -> std::path::PathBuf {
+        self.backup_dir
+            .clone()
+            .unwrap_or_else(|| paths.default_backup_dir())
     }
 
     /// The `java` invocation to use.

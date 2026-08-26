@@ -1,6 +1,7 @@
 //! Dashboard: start/stop the server, watch its memory, read the console, and
 //! send commands.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use adw::prelude::*;
@@ -26,6 +27,7 @@ enum Control {
     /// handle. Replies with the new backup's file name, or an error string.
     Backup {
         level: String,
+        backup_dir: PathBuf,
         auto: bool,
         reply: oneshot::Sender<Result<String, String>>,
     },
@@ -101,6 +103,7 @@ impl Component for DashboardPage {
 
                     gtk::Button {
                         set_label: "Start",
+                        set_tooltip_text: Some("Launch the server inside a memory-capped systemd scope"),
                         add_css_class: "suggested-action",
                         #[watch]
                         set_sensitive: model.can_start(),
@@ -109,12 +112,14 @@ impl Component for DashboardPage {
                     gtk::Button {
                         #[watch]
                         set_label: if model.orphan { "Stop external" } else { "Stop" },
+                        set_tooltip_text: Some("Send `stop`, then force-stop if it does not exit in time"),
                         #[watch]
                         set_sensitive: model.is_active(),
                         connect_clicked => DashboardInput::Stop,
                     },
                     gtk::Button {
                         set_label: "Restart",
+                        set_tooltip_text: Some("Stop the server and start it again with the current settings"),
                         #[watch]
                         set_sensitive: model.control.is_some(),
                         connect_clicked => DashboardInput::Restart,
@@ -123,6 +128,7 @@ impl Component for DashboardPage {
 
                 adw::ActionRow {
                     set_title: "Status",
+                    set_tooltip_text: Some("Whether the kernel is enforcing the memory ceiling for this run"),
                     #[watch]
                     set_subtitle: model.status_detail(),
                     add_suffix = &gtk::Label {
@@ -134,6 +140,7 @@ impl Component for DashboardPage {
 
                 adw::ActionRow {
                     set_title: "Memory (whole process tree)",
+                    set_tooltip_text: Some("Live cgroup usage vs the hard cap, with the peak so far"),
                     #[watch]
                     set_subtitle: &model.memory_detail(),
                     #[watch]
@@ -158,6 +165,7 @@ impl Component for DashboardPage {
                 #[wrap(Some)]
                 set_header_suffix = &gtk::Button {
                     set_label: "Clear",
+                    set_tooltip_text: Some("Clear the console view (the full log is still saved to data/logs)"),
                     connect_clicked => DashboardInput::ClearConsole,
                 },
 
@@ -320,7 +328,7 @@ impl Component for DashboardPage {
                 }
                 if auto && result.is_ok() {
                     let keep = self.ctx.state.borrow().auto_backup_keep as usize;
-                    match backup::prune_auto(&self.ctx.paths, keep) {
+                    match backup::prune_auto(&self.ctx.backup_dir(), keep) {
                         Ok(n) if n > 0 => {
                             self.append(&format!("[manager] Pruned {n} old auto-backup(s).\n"));
                         }
@@ -488,6 +496,7 @@ impl DashboardPage {
     /// [`DashboardInput::BackupFinished`].
     fn run_backup(&mut self, auto: bool, sender: &ComponentSender<Self>) {
         let level = backup::level_name(&self.ctx.paths);
+        let backup_dir = self.ctx.backup_dir();
         self.append(&format!(
             "[manager] {} backup starting…\n",
             if auto { "Automatic" } else { "Manual" }
@@ -501,6 +510,7 @@ impl DashboardPage {
                 let sent = control
                     .send(Control::Backup {
                         level,
+                        backup_dir,
                         auto,
                         reply: reply_tx,
                     })
@@ -519,7 +529,7 @@ impl DashboardPage {
             let paths = self.ctx.paths.clone();
             let sender = sender.clone();
             relm4::spawn(async move {
-                let result = backup::create(&paths, &level, auto)
+                let result = backup::create(&paths, &backup_dir, &level, auto)
                     .await
                     .map(|entry| entry.file_name)
                     .map_err(|e| e.to_string());
@@ -559,10 +569,10 @@ impl DashboardPage {
                                 let _ = handle.send_command(&line).await;
                             }
                             Some(Control::Stop) => handle.stop().await,
-                            Some(Control::Backup { level, auto, reply }) => {
+                            Some(Control::Backup { level, backup_dir, auto, reply }) => {
                                 let _ = handle.send_command("save-all flush").await;
                                 tokio::time::sleep(Duration::from_secs(2)).await;
-                                let r = backup::create(&paths, &level, auto)
+                                let r = backup::create(&paths, &backup_dir, &level, auto)
                                     .await
                                     .map(|entry| entry.file_name)
                                     .map_err(|e| e.to_string());

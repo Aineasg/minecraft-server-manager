@@ -60,28 +60,26 @@ impl Paths {
     ///
     /// Resolution order:
     /// 1. `$MCSM_ROOT`, if set.
-    /// 2. Walking up from the running executable, then from the current working
-    ///    directory, looking for a `Cargo.toml` that belongs to this workspace
-    ///    (contains the string `mcsm`) or a `.mcsm-root` marker file.
-    /// 3. The directory containing the executable (the shipped-binary case).
+    /// 2. **Portable mode:** walking up from the executable, then the working
+    ///    directory, for a `Cargo.toml` containing `mcsm` or a `.mcsm-root`
+    ///    marker — this is a clone of the repo run in place.
+    /// 3. **Installed mode:** the executable lives somewhere like `~/.local/bin`
+    ///    or `/usr/bin`, so use `$XDG_DATA_HOME/MinecraftServerManager`
+    ///    (default `~/.local/share/MinecraftServerManager`). Still one
+    ///    self-contained folder, just not next to the binary.
+    /// 4. Last resort: the directory containing the executable.
     pub fn discover() -> Result<Self> {
         if let Some(env_root) = std::env::var_os("MCSM_ROOT") {
             let root = PathBuf::from(env_root);
-            if root.is_dir() {
-                return Ok(Self::with_root(root));
-            }
-            return Err(Error::RootNotFound(format!(
-                "$MCSM_ROOT points at {}, which is not a directory",
-                root.display()
-            )));
+            std::fs::create_dir_all(&root).map_err(|e| {
+                Error::RootNotFound(format!("cannot use $MCSM_ROOT {}: {e}", root.display()))
+            })?;
+            return Ok(Self::with_root(root));
         }
 
         let exe = std::env::current_exe().ok();
         let cwd = std::env::current_dir().ok();
-        let starts = [
-            exe.as_deref().and_then(Path::parent),
-            cwd.as_deref(),
-        ];
+        let starts = [exe.as_deref().and_then(Path::parent), cwd.as_deref()];
 
         for start in starts.into_iter().flatten() {
             if let Some(root) = walk_up_for_root(start) {
@@ -89,13 +87,28 @@ impl Paths {
             }
         }
 
+        if let Some(data_home) = dirs::data_dir() {
+            return Ok(Self::with_root(data_home.join("MinecraftServerManager")));
+        }
+
         if let Some(dir) = exe.as_deref().and_then(Path::parent) {
             return Ok(Self::with_root(dir));
         }
 
         Err(Error::RootNotFound(
-            "set $MCSM_ROOT or run the binary from inside the project directory".into(),
+            "set $MCSM_ROOT to choose where the manager keeps its data".into(),
         ))
+    }
+
+    /// The default location for world backups: `~/Documents/Minecraft Server
+    /// Manager Backups`, falling back to `<root>/data/backups` when there is no
+    /// Documents directory. Used when the user has not set an explicit path.
+    #[must_use]
+    pub fn default_backup_dir(&self) -> PathBuf {
+        match dirs::document_dir() {
+            Some(docs) => docs.join("Minecraft Server Manager Backups"),
+            None => self.backups.clone(),
+        }
     }
 
     /// Create `data/` and every subdirectory. Idempotent.

@@ -57,6 +57,7 @@ impl Component for ModsPage {
                 },
                 pack_end = &gtk::Button {
                     set_label: "Check for updates",
+                    set_tooltip_text: Some("Ask Modrinth for newer builds of every installed mod for your version"),
                     #[watch]
                     set_sensitive: !model.busy && model.ctx.installed_versions().is_some(),
                     connect_clicked => ModsInput::CheckUpdates,

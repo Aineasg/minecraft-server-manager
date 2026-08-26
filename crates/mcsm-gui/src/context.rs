@@ -7,6 +7,7 @@
 //! it is handed owned copies of what it needs.
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use mcsm_core::net::modrinth::Modrinth;
@@ -26,8 +27,14 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(paths: Paths, state: AppState) -> anyhow::Result<Self> {
+    pub fn new(paths: Paths, mut state: AppState) -> anyhow::Result<Self> {
         let http = Http::new()?;
+        // Pin the backup location the first time so it is never forgotten, even
+        // if this folder is later deleted and recreated somewhere else.
+        if state.backup_dir.is_none() {
+            state.backup_dir = Some(paths.default_backup_dir());
+            let _ = state.save(&paths.state_file);
+        }
         Ok(Self {
             modrinth: Modrinth::new(http.clone()),
             http,
@@ -36,9 +43,14 @@ impl Context {
         })
     }
 
-    /// Persist the current [`AppState`] to `data/state.toml`.
+    /// Persist the current [`AppState`] to `state.toml`.
     pub fn save_state(&self) -> mcsm_core::Result<()> {
         self.state.borrow().save(&self.paths.state_file)
+    }
+
+    /// The directory world backups are written to.
+    pub fn backup_dir(&self) -> PathBuf {
+        self.state.borrow().backup_dir(&self.paths)
     }
 
     /// `(minecraft_version, loader_version)` if the server is installed.

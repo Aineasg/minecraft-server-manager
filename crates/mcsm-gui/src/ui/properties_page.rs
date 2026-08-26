@@ -68,6 +68,7 @@ impl Component for PropertiesPage {
                 },
                 pack_end = &gtk::Button {
                     set_label: "Save",
+                    set_tooltip_text: Some("Write server.properties, preserving comments and key order"),
                     add_css_class: "suggested-action",
                     #[watch]
                     set_sensitive: model.dirty,

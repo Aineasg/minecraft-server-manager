@@ -73,9 +73,8 @@ impl BackupEntry {
     }
 }
 
-/// Existing backups, newest first.
-pub fn list(paths: &Paths) -> Result<Vec<BackupEntry>> {
-    let dir = &paths.backups;
+/// Existing backups in `dir`, newest first. A missing directory is empty.
+pub fn list(dir: &Path) -> Result<Vec<BackupEntry>> {
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -98,14 +97,19 @@ pub fn list(paths: &Paths) -> Result<Vec<BackupEntry>> {
     Ok(entries)
 }
 
-/// Create a new archive of the current world.
+/// Create a new archive of the current world into `backup_dir`.
 ///
 /// Callers that back up a *running* server should send `save-all flush` and
 /// wait a moment first; this function only archives what is on disk. `auto`
 /// marks the archive as one made by the automatic-backup timer (see
 /// [`prune_auto`]).
-pub async fn create(paths: &Paths, level_name: &str, auto: bool) -> Result<BackupEntry> {
-    paths.ensure_dirs()?;
+pub async fn create(
+    paths: &Paths,
+    backup_dir: &Path,
+    level_name: &str,
+    auto: bool,
+) -> Result<BackupEntry> {
+    std::fs::create_dir_all(backup_dir).map_err(|e| Error::io(backup_dir, e))?;
     let dirs = world_dirs(&paths.server, level_name);
     if dirs.is_empty() {
         return Err(Error::msg(format!(
@@ -115,7 +119,7 @@ pub async fn create(paths: &Paths, level_name: &str, auto: bool) -> Result<Backu
 
     let prefix = if auto { AUTO_PREFIX } else { MANUAL_PREFIX };
     let file_name = format!("{prefix}{}.tar.zst", format_compact_utc(SystemTime::now()));
-    let archive = paths.backups.join(&file_name);
+    let archive = backup_dir.join(&file_name);
     let partial = archive.with_extension("zst.part");
 
     let mut cmd = Command::new("tar");
@@ -185,16 +189,16 @@ pub fn delete(entry: &BackupEntry) -> Result<()> {
     }
 }
 
-/// Delete the oldest automatic backups, keeping the `keep` most recent.
+/// Delete the oldest automatic backups in `dir`, keeping the `keep` most recent.
 ///
 /// `keep == 0` keeps everything. Manual backups are never touched. Returns how
 /// many files were removed.
-pub fn prune_auto(paths: &Paths, keep: usize) -> Result<usize> {
+pub fn prune_auto(dir: &Path, keep: usize) -> Result<usize> {
     if keep == 0 {
         return Ok(0);
     }
     let mut removed = 0;
-    for stale in list(paths)?
+    for stale in list(dir)?
         .into_iter()
         .filter(BackupEntry::is_automatic)
         .skip(keep)
@@ -251,10 +255,11 @@ mod tests {
         std::fs::create_dir_all(&region).unwrap();
         std::fs::write(region.join("r.0.0.mca"), b"chunkdata").unwrap();
 
-        let entry = create(&paths, "world", false).await.unwrap();
+        let bdir = paths.backups.clone();
+        let entry = create(&paths, &bdir, "world", false).await.unwrap();
         assert!(entry.path.is_file());
         assert!(!entry.is_automatic());
-        assert_eq!(list(&paths).unwrap().len(), 1);
+        assert_eq!(list(&bdir).unwrap().len(), 1);
 
         std::fs::write(region.join("r.0.0.mca"), b"CORRUPTED").unwrap();
         restore(&paths, &entry, "world").await.unwrap();
@@ -265,8 +270,8 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    fn touch_backup(paths: &Paths, name: &str, mtime_offset_secs: u64) {
-        let path = paths.backups.join(name);
+    fn touch_backup(dir: &std::path::Path, name: &str, mtime_offset_secs: u64) {
+        let path = dir.join(name);
         let file = std::fs::File::create(&path).unwrap();
         let when = SystemTime::UNIX_EPOCH
             + std::time::Duration::from_secs(1_700_000_000 + mtime_offset_secs);
@@ -278,11 +283,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mcsm-bk-del-{}", std::process::id()));
         let paths = Paths::with_root(&root);
         paths.ensure_dirs().unwrap();
-        touch_backup(&paths, "world-20260101-000000.tar.zst", 0);
+        touch_backup(&paths.backups, "world-20260101-000000.tar.zst", 0);
 
-        let entry = list(&paths).unwrap().pop().unwrap();
+        let entry = list(&paths.backups).unwrap().pop().unwrap();
         delete(&entry).unwrap();
-        assert!(list(&paths).unwrap().is_empty());
+        assert!(list(&paths.backups).unwrap().is_empty());
         delete(&entry).unwrap(); // second time is a no-op
 
         std::fs::remove_dir_all(&root).ok();
@@ -295,18 +300,18 @@ mod tests {
         paths.ensure_dirs().unwrap();
 
         for i in 0..5 {
-            touch_backup(&paths, &format!("auto-world-2026010{}-000000.tar.zst", i + 1), i * 100);
+            touch_backup(&paths.backups, &format!("auto-world-2026010{}-000000.tar.zst", i + 1), i * 100);
         }
-        touch_backup(&paths, "world-20260101-120000.tar.zst", 50);
+        touch_backup(&paths.backups, "world-20260101-120000.tar.zst", 50);
 
-        let removed = prune_auto(&paths, 2).unwrap();
+        let removed = prune_auto(&paths.backups, 2).unwrap();
         assert_eq!(removed, 3);
 
-        let remaining: Vec<String> = list(&paths).unwrap().into_iter().map(|e| e.file_name).collect();
+        let remaining: Vec<String> = list(&paths.backups).unwrap().into_iter().map(|e| e.file_name).collect();
         assert_eq!(remaining.iter().filter(|n| n.starts_with("auto-world-")).count(), 2);
         assert!(remaining.iter().any(|n| n == "world-20260101-120000.tar.zst"));
         // keep == 0 is a no-op
-        assert_eq!(prune_auto(&paths, 0).unwrap(), 0);
+        assert_eq!(prune_auto(&paths.backups, 0).unwrap(), 0);
 
         std::fs::remove_dir_all(&root).ok();
     }

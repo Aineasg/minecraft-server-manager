@@ -13,15 +13,15 @@ use crate::ui::mods_page::{ModsInput, ModsPage};
 use crate::ui::properties_page::{PropertiesInput, PropertiesPage};
 use crate::ui::settings_page::{SettingsOutput, SettingsPage};
 
-/// `(stack id, sidebar label)` in sidebar order.
-const PAGES: [(&str, &str); 7] = [
-    ("dashboard", "Dashboard"),
-    ("mods", "Mods"),
-    ("properties", "Properties"),
-    ("access", "Player access"),
-    ("files", "Files"),
-    ("backups", "Backups"),
-    ("settings", "Settings"),
+/// `(stack id, sidebar label, hover description)` in sidebar order.
+const PAGES: [(&str, &str, &str); 7] = [
+    ("dashboard", "Dashboard", "Start, stop and restart the server, watch its memory, read the console and send commands"),
+    ("mods", "Mods", "Search Modrinth, install mods with their dependencies, enable/disable and update"),
+    ("properties", "Properties", "Edit server.properties as a form, plus world-only settings (hardcore) stored in level.dat"),
+    ("access", "Player access", "Operators, whitelist and bans — applied live when the server is running"),
+    ("files", "Files", "A plain-text editor for any file under the data folder"),
+    ("backups", "Backups", "Schedule automatic world backups, and create, restore or delete them"),
+    ("settings", "Settings", "Minecraft/Fabric version, memory budget, Java, EULA, backup folder"),
 ];
 const SETTINGS_INDEX: i32 = 6;
 
@@ -55,6 +55,8 @@ pub enum AppMsg {
     ReloadBackups,
     /// Player access page wants a console command run on the live server.
     RunServerCommand(String),
+    /// Open the data folder in the file manager.
+    OpenDataFolder,
 }
 
 #[relm4::component(pub)]
@@ -98,7 +100,13 @@ impl Component for App {
                     set_title: "Server",
                     #[wrap(Some)]
                     set_child = &adw::ToolbarView {
-                        add_top_bar = &adw::HeaderBar {},
+                        add_top_bar = &adw::HeaderBar {
+                            pack_end = &gtk::Button {
+                                set_icon_name: "folder-symbolic",
+                                set_tooltip_text: Some("Open the data folder (server, world, mods, config)"),
+                                connect_clicked => AppMsg::OpenDataFolder,
+                            },
+                        },
                         #[wrap(Some)]
                         set_content = &gtk::Box {
                             set_orientation: gtk::Orientation::Vertical,
@@ -154,6 +162,7 @@ impl Component for App {
             |out| match out {
                 SettingsOutput::Changed => AppMsg::RefreshBanner,
                 SettingsOutput::Installed => AppMsg::ReloadServerPages,
+                SettingsOutput::BackupDirChanged => AppMsg::ReloadBackups,
             },
         );
 
@@ -176,7 +185,7 @@ impl Component for App {
 
         let widgets = view_output!();
 
-        for (id, title) in PAGES {
+        for (id, title, description) in PAGES {
             let child: &gtk::Widget = match id {
                 "dashboard" => model.dashboard.widget().upcast_ref(),
                 "mods" => model.mods.widget().upcast_ref(),
@@ -194,6 +203,7 @@ impl Component for App {
             label.set_margin_top(8);
             label.set_margin_bottom(8);
             label.set_margin_start(6);
+            label.set_tooltip_text(Some(description));
             sidebar_list.append(&label);
         }
         if let Some(first) = sidebar_list.row_at_index(0) {
@@ -207,7 +217,7 @@ impl Component for App {
     fn update(&mut self, msg: Self::Input, _sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
             AppMsg::ShowPage(index) => {
-                let Some((id, _)) = PAGES.get(index.max(0) as usize) else {
+                let Some((id, ..)) = PAGES.get(index.max(0) as usize) else {
                     return;
                 };
                 self.stack.set_visible_child_name(id);
@@ -234,6 +244,14 @@ impl Component for App {
             }
             AppMsg::RunServerCommand(cmd) => {
                 let _ = self.dashboard.sender().send(DashboardInput::RunCommand(cmd));
+            }
+            AppMsg::OpenDataFolder => {
+                let file = relm4::gtk::gio::File::for_path(&self.ctx.paths.data);
+                relm4::gtk::FileLauncher::new(Some(&file)).launch(
+                    relm4::gtk::Window::NONE,
+                    relm4::gtk::gio::Cancellable::NONE,
+                    |_| {},
+                );
             }
         }
     }

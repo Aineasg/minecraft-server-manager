@@ -1,12 +1,15 @@
 //! Settings: pick the Minecraft/Fabric version and install it, tune the memory
 //! budget and JVM, point at a `java` binary, and accept the EULA.
 
+use std::path::PathBuf;
+
 use adw::prelude::*;
 use mcsm_core::memory::MemoryBudget;
 use mcsm_core::net::fabric::{self, GameVersion};
 use mcsm_core::net::Http;
 use mcsm_core::ops::install::{self, InstallPlan, InstallProgress};
 use mcsm_core::state::GcPreset;
+use relm4::gtk::gio;
 use relm4::prelude::*;
 
 use crate::context::{Context, LAUNCHER_JAR};
@@ -45,6 +48,8 @@ pub enum SettingsInput {
     InstallProgress(String),
     InstallFinished(Result<(), String>),
     SaveJvm,
+    BackupDirEdited(String),
+    BrowseBackupDir,
 }
 
 #[derive(Debug)]
@@ -53,6 +58,8 @@ pub enum SettingsOutput {
     Changed,
     /// A server install completed.
     Installed,
+    /// The backup folder was changed; the Backups page should reload.
+    BackupDirChanged,
 }
 
 #[derive(Debug, Clone)]
@@ -219,6 +226,48 @@ impl Component for SettingsPage {
                     },
                 },
             },
+
+            add = &adw::PreferencesGroup {
+                set_title: "Backups",
+                set_description: Some(
+                    "World backups are written here. The default is your Documents folder, so deleting or moving the app folder never loses a world.",
+                ),
+
+                #[name = "backup_dir_row"]
+                adw::EntryRow {
+                    set_title: "Backup folder",
+                    #[watch]
+                    #[block_signal(backup_dir_edited)]
+                    set_text: &model.ctx.backup_dir().display().to_string(),
+                    connect_changed[sender] => move |row| {
+                        sender.input(SettingsInput::BackupDirEdited(row.text().to_string()));
+                    } @backup_dir_edited,
+                    add_suffix = &gtk::Button {
+                        set_valign: gtk::Align::Center,
+                        set_icon_name: "folder-open-symbolic",
+                        set_tooltip_text: Some("Choose a folder"),
+                        connect_clicked => SettingsInput::BrowseBackupDir,
+                    },
+                },
+            },
+
+            add = &adw::PreferencesGroup {
+                set_title: "About",
+
+                adw::ActionRow {
+                    set_title: "Minecraft Server Manager",
+                    set_subtitle: concat!("Version ", env!("CARGO_PKG_VERSION")),
+                },
+                adw::ActionRow {
+                    set_title: "Source",
+                    set_subtitle: "https://github.com/aineasg/minecraft-server-manager",
+                },
+                adw::ActionRow {
+                    set_title: "Licence — GNU Affero GPL v3 or later",
+                    set_subtitle: "Free software with NO WARRANTY. Any modified version you distribute or make available over a network must also be released under the AGPL.",
+                    set_subtitle_lines: 3,
+                },
+            },
         }
     }
 
@@ -341,6 +390,37 @@ impl Component for SettingsPage {
                 let _ = self.ctx.save_state();
                 self.status_line = "Java & memory settings saved.".to_string();
                 let _ = sender.output(SettingsOutput::Changed);
+            }
+            SettingsInput::BackupDirEdited(text) => {
+                let expanded = expand_tilde(text.trim());
+                let new = (!expanded.as_os_str().is_empty()).then_some(expanded);
+                if self.ctx.state.borrow().backup_dir == new {
+                    return;
+                }
+                self.ctx.state.borrow_mut().backup_dir = new;
+                let _ = self.ctx.save_state();
+                self.status_line = format!("Backups will be saved to {}", self.ctx.backup_dir().display());
+                let _ = sender.output(SettingsOutput::BackupDirChanged);
+            }
+            SettingsInput::BrowseBackupDir => {
+                let dialog = gtk::FileDialog::builder()
+                    .title("Choose the backup folder")
+                    .modal(true)
+                    .build();
+                let start = self.ctx.backup_dir();
+                if start.is_dir() {
+                    dialog.set_initial_folder(Some(&gio::File::for_path(&start)));
+                }
+                let s = sender.clone();
+                dialog.select_folder(
+                    gtk::Window::NONE,
+                    gio::Cancellable::NONE,
+                    move |res| {
+                        if let Ok(Some(path)) = res.map(|f| f.path()) {
+                            s.input(SettingsInput::BackupDirEdited(path.display().to_string()));
+                        }
+                    },
+                );
             }
             SettingsInput::Install => {
                 let (Some(mc), Some(loader), Some(installer)) = (
@@ -515,4 +595,13 @@ fn string_list<S: AsRef<str>>(items: &[S]) -> gtk::StringList {
         list.append(item.as_ref());
     }
     list
+}
+
+/// Expand a leading `~` / `~/` to `$HOME` so hand-typed paths behave.
+fn expand_tilde(input: &str) -> PathBuf {
+    match (input.strip_prefix("~/"), input == "~", std::env::var_os("HOME")) {
+        (Some(rest), _, Some(home)) => PathBuf::from(home).join(rest),
+        (_, true, Some(home)) => PathBuf::from(home),
+        _ => PathBuf::from(input),
+    }
 }
