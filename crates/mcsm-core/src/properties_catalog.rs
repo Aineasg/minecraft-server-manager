@@ -32,6 +32,34 @@ impl PropDef {
     }
 }
 
+/// Whether the server only picks this key up at (re)start.
+///
+/// Most gameplay keys (`difficulty`, `gamemode`, `pvp`, `view-distance`,
+/// `spawn-protection`, …) are re-applied by the dedicated server on every
+/// launch, so editing them never needs a world reset — only a restart. The keys
+/// below are the ones that genuinely do nothing until the next start.
+#[must_use]
+pub fn restart_required(key: &str) -> bool {
+    matches!(
+        key,
+        "server-port"
+            | "server-ip"
+            | "online-mode"
+            | "level-name"
+            | "level-seed"
+            | "level-type"
+            | "generator-settings"
+            | "enable-rcon"
+            | "rcon.port"
+            | "rcon.password"
+            | "enable-query"
+            | "query.port"
+            | "network-compression-threshold"
+            | "prevent-proxy-connections"
+            | "rate-limit"
+    )
+}
+
 use FieldKind::{Bool, Choice, Int, Text};
 
 /// The catalogue, grouped loosely by topic in declaration order.
@@ -105,6 +133,14 @@ pub const CATALOG: &[PropDef] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restart_keys_are_recognised() {
+        assert!(restart_required("server-port"));
+        assert!(restart_required("online-mode"));
+        assert!(!restart_required("difficulty"));
+        assert!(!restart_required("pvp"));
+    }
 
     #[test]
     fn catalogue_has_no_duplicate_keys() {

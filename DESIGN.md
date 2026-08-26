@@ -93,6 +93,29 @@ unsupported feature — `server.properties` never uses them.
 `properties_catalog` is a static table (key, label, type, range, default, help)
 the GUI turns into a typed form. Keys not in the catalogue still round-trip;
 the GUI shows them as plain text fields in an "Other" group.
+`properties_catalog::restart_required(key)` marks the handful of keys the server
+only reads at launch (ports, `online-mode`, `level-*`, RCON/query); the form
+tags those rows. Everything else is re-applied by the dedicated server on every
+start, so no `server.properties` change ever needs a world reset.
+
+## World settings in `level.dat` (`mcsm_core::ops::level_dat`)
+
+`hardcore`, `Difficulty` and `DifficultyLocked` live in the world's `level.dat`
+(gzip-compressed NBT), not `server.properties` — `server.properties` only seeds
+them at world creation. This module gunzips `level.dat`, patches those three
+bytes in the `Data` compound via `fastnbt`, re-gzips, backs up the old file to
+`level.dat.bak` and atomically writes. The Properties page exposes them as a
+"World (level.dat)" group, disabled while the server runs (it holds the file
+open and rewrites it on autosave).
+
+## Player access (`mcsm_core::access` + GUI routing)
+
+When the server is **running**, add/remove on the Player access page issues the
+matching console command (`op`/`deop`/`whitelist add`/`whitelist remove`/`ban`/
+`pardon`/`ban-ip`/`pardon-ip`) — routed to the Dashboard's stdin like backups —
+so it takes effect immediately, then the JSON the server rewrote is re-read.
+When **stopped**, the JSON is edited directly with an offline-mode UUID.
+Running-state is checked per action via `scope_active()`.
 
 ## Mods (`mcsm_core::net::modrinth`, `mcsm_core::ops::mods`)
 

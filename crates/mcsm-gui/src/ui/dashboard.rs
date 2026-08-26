@@ -68,6 +68,8 @@ pub enum DashboardInput {
     BackupNow,
     /// The automatic-backup timer fired.
     AutoBackup,
+    /// Send a console command to the running server (from the Player access page).
+    RunCommand(String),
     BackupFinished {
         auto: bool,
         result: Result<String, String>,
@@ -300,6 +302,16 @@ impl Component for DashboardPage {
             }
             DashboardInput::BackupNow => self.run_backup(false, &sender),
             DashboardInput::AutoBackup => self.run_backup(true, &sender),
+            DashboardInput::RunCommand(cmd) => {
+                if self.control.is_some() {
+                    self.append(&format!("> {cmd}\n"));
+                    self.send_control(Control::Console(cmd));
+                } else {
+                    self.append(&format!(
+                        "[manager] `{cmd}` not sent — the server is not running.\n"
+                    ));
+                }
+            }
             DashboardInput::BackupFinished { auto, result } => {
                 let kind = if auto { "Auto-backup" } else { "Backup" };
                 match &result {

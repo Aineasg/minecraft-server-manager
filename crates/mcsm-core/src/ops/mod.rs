@@ -3,5 +3,6 @@
 
 pub mod backup;
 pub mod install;
+pub mod level_dat;
 pub mod mods;
 pub mod server;

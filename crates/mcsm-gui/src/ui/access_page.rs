@@ -1,18 +1,33 @@
 //! Player access editor for `ops.json`, `whitelist.json`,
 //! `banned-players.json` and `banned-ips.json`.
 //!
-//! New player entries get an **offline-mode** UUID immediately (correct for a
-//! LAN server); "Resolve UUIDs online" replaces them with the real Mojang
-//! account UUIDs for an online-mode server.
+//! When the server is **running** each change is issued as a console command
+//! (`op`, `whitelist add`, `ban`, …) so it takes effect immediately, then the
+//! JSON the server wrote is re-read. When it is **stopped**, the JSON is edited
+//! directly — new entries get an offline-mode UUID, and "Resolve UUIDs online"
+//! swaps in real Mojang account UUIDs.
+
+use std::time::Duration;
 
 use adw::prelude::*;
 use mcsm_core::access::{
     self, offline_uuid, parse_ip, AccessFile, BannedIp, BannedPlayer, OpEntry, WhitelistEntry,
 };
 use mcsm_core::net::mojang;
+use mcsm_core::ops::server::scope_active;
 use relm4::prelude::*;
 
 use crate::context::Context;
+
+/// A pending access change, carried through the "is the server running?" check.
+#[derive(Debug, Clone)]
+pub enum AccessAction {
+    AddOp(String),
+    AddWhitelist(String),
+    AddBan(String),
+    AddIpBan(String),
+    Remove(AccessFile, usize),
+}
 
 pub struct AccessPage {
     ctx: Context,
@@ -33,15 +48,23 @@ pub enum AccessInput {
     AddBan(String),
     AddIpBan(String),
     Remove(AccessFile, usize),
+    /// Result of the running-state check for a queued action.
+    Apply { running: bool, action: AccessAction },
     ResolveOnline,
     ResolvedUuids(Vec<(String, String)>),
+}
+
+#[derive(Debug)]
+pub enum AccessOutput {
+    /// Run this console command on the live server.
+    RunCommand(String),
 }
 
 #[relm4::component(pub)]
 impl Component for AccessPage {
     type Init = Context;
     type Input = AccessInput;
-    type Output = ();
+    type Output = AccessOutput;
     type CommandOutput = AccessInput;
 
     view! {
@@ -94,61 +117,16 @@ impl Component for AccessPage {
                 self.reload();
                 self.rebuild(&sender);
             }
-            AccessInput::AddOp(name) => {
-                if !name.trim().is_empty() {
-                    self.ops.push(OpEntry::new(offline_uuid(name.trim()), name.trim()));
-                    self.save(AccessFile::Ops);
-                    self.rebuild(&sender);
-                }
-            }
+            AccessInput::AddOp(name) => self.dispatch(AccessAction::AddOp(name), &sender),
             AccessInput::AddWhitelist(name) => {
-                if !name.trim().is_empty() {
-                    self.whitelist.push(WhitelistEntry {
-                        uuid: offline_uuid(name.trim()),
-                        name: name.trim().to_string(),
-                    });
-                    self.save(AccessFile::Whitelist);
-                    self.rebuild(&sender);
-                }
+                self.dispatch(AccessAction::AddWhitelist(name), &sender);
             }
-            AccessInput::AddBan(name) => {
-                if !name.trim().is_empty() {
-                    self.bans.push(BannedPlayer {
-                        uuid: offline_uuid(name.trim()),
-                        name: name.trim().to_string(),
-                        created: String::new(),
-                        source: "(Manager)".to_string(),
-                        expires: "forever".to_string(),
-                        reason: "Banned by an operator.".to_string(),
-                    });
-                    self.save(AccessFile::BannedPlayers);
-                    self.rebuild(&sender);
-                }
-            }
-            AccessInput::AddIpBan(ip) => match parse_ip(&ip) {
-                Ok(addr) => {
-                    self.ip_bans.push(BannedIp {
-                        ip: addr.to_string(),
-                        created: String::new(),
-                        source: "(Manager)".to_string(),
-                        expires: "forever".to_string(),
-                        reason: "Banned by an operator.".to_string(),
-                    });
-                    self.save(AccessFile::BannedIps);
-                    self.rebuild(&sender);
-                }
-                Err(e) => self.status = e.to_string(),
-            },
+            AccessInput::AddBan(name) => self.dispatch(AccessAction::AddBan(name), &sender),
+            AccessInput::AddIpBan(ip) => self.dispatch(AccessAction::AddIpBan(ip), &sender),
             AccessInput::Remove(file, idx) => {
-                match file {
-                    AccessFile::Ops => drop_at(&mut self.ops, idx),
-                    AccessFile::Whitelist => drop_at(&mut self.whitelist, idx),
-                    AccessFile::BannedPlayers => drop_at(&mut self.bans, idx),
-                    AccessFile::BannedIps => drop_at(&mut self.ip_bans, idx),
-                }
-                self.save(file);
-                self.rebuild(&sender);
+                self.dispatch(AccessAction::Remove(file, idx), &sender);
             }
+            AccessInput::Apply { running, action } => self.apply(running, action, &sender),
             AccessInput::ResolveOnline => {
                 let names: Vec<String> = self
                     .ops
@@ -233,6 +211,128 @@ impl AccessPage {
         };
         if let Err(e) = result {
             self.status = format!("Save failed: {e}");
+        }
+    }
+
+    /// Check whether the server is running, then route the action accordingly.
+    fn dispatch(&mut self, action: AccessAction, sender: &ComponentSender<Self>) {
+        if let AccessAction::AddIpBan(ip) = &action {
+            if let Err(e) = parse_ip(ip) {
+                self.status = e.to_string();
+                return;
+            }
+        }
+        sender.command(move |out, shutdown| {
+            shutdown
+                .register(async move {
+                    let running = scope_active().await;
+                    let _ = out.send(AccessInput::Apply { running, action });
+                })
+                .drop_on_shutdown()
+        });
+    }
+
+    fn apply(&mut self, running: bool, action: AccessAction, sender: &ComponentSender<Self>) {
+        if running {
+            match self.console_command(&action) {
+                Some(cmd) => {
+                    self.status = format!("Applied live: {cmd}");
+                    let _ = sender.output(AccessOutput::RunCommand(cmd));
+                    // Re-read after the server has rewritten its JSON files.
+                    let s = sender.clone();
+                    relm4::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(800)).await;
+                        s.input(AccessInput::Reload);
+                    });
+                }
+                None => self.status = "Nothing to do.".to_string(),
+            }
+        } else {
+            self.apply_offline(&action);
+            self.rebuild(sender);
+        }
+    }
+
+    /// The console command for an action, using the *current* entry for removals.
+    fn console_command(&self, action: &AccessAction) -> Option<String> {
+        let trimmed = |s: &str| s.trim().to_string();
+        Some(match action {
+            AccessAction::AddOp(n) if !n.trim().is_empty() => format!("op {}", trimmed(n)),
+            AccessAction::AddWhitelist(n) if !n.trim().is_empty() => {
+                format!("whitelist add {}", trimmed(n))
+            }
+            AccessAction::AddBan(n) if !n.trim().is_empty() => format!("ban {}", trimmed(n)),
+            AccessAction::AddIpBan(ip) => format!("ban-ip {}", parse_ip(ip).ok()?),
+            AccessAction::Remove(AccessFile::Ops, i) => format!("deop {}", self.ops.get(*i)?.name),
+            AccessAction::Remove(AccessFile::Whitelist, i) => {
+                format!("whitelist remove {}", self.whitelist.get(*i)?.name)
+            }
+            AccessAction::Remove(AccessFile::BannedPlayers, i) => {
+                format!("pardon {}", self.bans.get(*i)?.name)
+            }
+            AccessAction::Remove(AccessFile::BannedIps, i) => {
+                format!("pardon-ip {}", self.ip_bans.get(*i)?.ip)
+            }
+            _ => return None,
+        })
+    }
+
+    /// Edit the JSON files directly (server is stopped).
+    fn apply_offline(&mut self, action: &AccessAction) {
+        match action {
+            AccessAction::AddOp(name) if !name.trim().is_empty() => {
+                let name = name.trim();
+                self.ops.push(OpEntry::new(offline_uuid(name), name));
+                self.save(AccessFile::Ops);
+                self.status = format!("Added op {name} — effective on next start");
+            }
+            AccessAction::AddWhitelist(name) if !name.trim().is_empty() => {
+                let name = name.trim();
+                self.whitelist.push(WhitelistEntry {
+                    uuid: offline_uuid(name),
+                    name: name.to_string(),
+                });
+                self.save(AccessFile::Whitelist);
+                self.status = format!("Whitelisted {name} — effective on next start");
+            }
+            AccessAction::AddBan(name) if !name.trim().is_empty() => {
+                let name = name.trim();
+                self.bans.push(BannedPlayer {
+                    uuid: offline_uuid(name),
+                    name: name.to_string(),
+                    created: String::new(),
+                    source: "(Manager)".to_string(),
+                    expires: "forever".to_string(),
+                    reason: "Banned by an operator.".to_string(),
+                });
+                self.save(AccessFile::BannedPlayers);
+                self.status = format!("Banned {name} — effective on next start");
+            }
+            AccessAction::AddIpBan(ip) => match parse_ip(ip) {
+                Ok(addr) => {
+                    self.ip_bans.push(BannedIp {
+                        ip: addr.to_string(),
+                        created: String::new(),
+                        source: "(Manager)".to_string(),
+                        expires: "forever".to_string(),
+                        reason: "Banned by an operator.".to_string(),
+                    });
+                    self.save(AccessFile::BannedIps);
+                    self.status = format!("Banned IP {addr} — effective on next start");
+                }
+                Err(e) => self.status = e.to_string(),
+            },
+            AccessAction::Remove(file, idx) => {
+                match file {
+                    AccessFile::Ops => drop_at(&mut self.ops, *idx),
+                    AccessFile::Whitelist => drop_at(&mut self.whitelist, *idx),
+                    AccessFile::BannedPlayers => drop_at(&mut self.bans, *idx),
+                    AccessFile::BannedIps => drop_at(&mut self.ip_bans, *idx),
+                }
+                self.save(*file);
+                self.status = "Removed — effective on next start".to_string();
+            }
+            _ => {}
         }
     }
 

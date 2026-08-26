@@ -5,7 +5,7 @@ use adw::prelude::*;
 use relm4::prelude::*;
 
 use crate::context::Context;
-use crate::ui::access_page::{AccessInput, AccessPage};
+use crate::ui::access_page::{AccessInput, AccessOutput, AccessPage};
 use crate::ui::backups_page::{BackupsInput, BackupsOutput, BackupsPage};
 use crate::ui::dashboard::{DashboardInput, DashboardOutput, DashboardPage};
 use crate::ui::files_page::{FilesInput, FilesPage};
@@ -53,6 +53,8 @@ pub enum AppMsg {
     AutoBackup,
     /// A backup was taken; refresh the Backups list.
     ReloadBackups,
+    /// Player access page wants a console command run on the live server.
+    RunServerCommand(String),
 }
 
 #[relm4::component(pub)]
@@ -133,7 +135,12 @@ impl Component for App {
             });
         let mods = ModsPage::builder().launch(ctx.clone()).detach();
         let properties = PropertiesPage::builder().launch(ctx.clone()).detach();
-        let access = AccessPage::builder().launch(ctx.clone()).detach();
+        let access = AccessPage::builder().launch(ctx.clone()).forward(
+            sender.input_sender(),
+            |out| match out {
+                AccessOutput::RunCommand(cmd) => AppMsg::RunServerCommand(cmd),
+            },
+        );
         let files = FilesPage::builder().launch(ctx.clone()).detach();
         let backups = BackupsPage::builder().launch(ctx.clone()).forward(
             sender.input_sender(),
@@ -224,6 +231,9 @@ impl Component for App {
             }
             AppMsg::ReloadBackups => {
                 let _ = self.backups.sender().send(BackupsInput::Reload);
+            }
+            AppMsg::RunServerCommand(cmd) => {
+                let _ = self.dashboard.sender().send(DashboardInput::RunCommand(cmd));
             }
         }
     }

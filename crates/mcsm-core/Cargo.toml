@@ -28,6 +28,8 @@ sha1.workspace = true
 md-5.workspace = true
 hex.workspace = true
 zip.workspace = true
+fastnbt.workspace = true
+flate2.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

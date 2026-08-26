@@ -3,18 +3,31 @@
 //! [`mcsm_core::properties::Properties`] writer.
 
 use adw::prelude::*;
+use mcsm_core::ops::backup;
+use mcsm_core::ops::level_dat::{self, WorldSettings};
+use mcsm_core::ops::server::scope_active;
 use mcsm_core::properties::Properties;
-use mcsm_core::properties_catalog::{FieldKind, CATALOG};
+use mcsm_core::properties_catalog::{restart_required, FieldKind, CATALOG};
 use mcsm_core::util::{read_to_string_opt, write_atomic};
 use relm4::prelude::*;
 
 use crate::context::Context;
+
+const DIFFICULTIES: [&str; 4] = ["peaceful", "easy", "normal", "hard"];
 
 pub struct PropertiesPage {
     ctx: Context,
     props: Option<Properties>,
     dirty: bool,
     status: String,
+    /// World settings from `level.dat`, when the world has been generated.
+    world: Option<WorldSettings>,
+    world_level: String,
+    /// The server is running, so `level.dat` must not be touched.
+    world_locked: bool,
+    /// Rows in the "World (level.dat)" group, so their sensitivity can be
+    /// toggled when the server's running state is learned asynchronously.
+    world_rows: Vec<gtk::Widget>,
     page: adw::PreferencesPage,
     groups: Vec<adw::PreferencesGroup>,
 }
@@ -24,6 +37,11 @@ pub enum PropertiesInput {
     Reload,
     Set(String, String),
     Save,
+    SetHardcore(bool),
+    SetDifficulty(u8),
+    SetLockDifficulty(bool),
+    /// Async result of checking whether the server is running.
+    WorldLocked(bool),
 }
 
 #[relm4::component(pub)]
@@ -70,6 +88,10 @@ impl Component for PropertiesPage {
             props: None,
             dirty: false,
             status: String::new(),
+            world: None,
+            world_level: "world".to_string(),
+            world_locked: true, // assume locked until the async check says otherwise
+            world_rows: Vec::new(),
             page: page.clone(),
             groups: Vec::new(),
         };
@@ -99,6 +121,21 @@ impl Component for PropertiesPage {
                     Err(e) => self.status = format!("Save failed: {e}"),
                 }
             }
+            PropertiesInput::SetHardcore(on) => {
+                self.mutate_world(|w| w.hardcore = on);
+            }
+            PropertiesInput::SetDifficulty(level) => {
+                self.mutate_world(|w| w.difficulty = level);
+            }
+            PropertiesInput::SetLockDifficulty(on) => {
+                self.mutate_world(|w| w.difficulty_locked = on);
+            }
+            PropertiesInput::WorldLocked(locked) => {
+                self.world_locked = locked;
+                for row in &self.world_rows {
+                    row.set_sensitive(!locked);
+                }
+            }
         }
     }
 }
@@ -108,7 +145,26 @@ impl PropertiesPage {
         for group in self.groups.drain(..) {
             self.page.remove(&group);
         }
+        self.world_rows.clear();
         self.dirty = false;
+
+        // World settings from level.dat (hardcore etc.), if the world exists.
+        self.world_level = backup::level_name(&self.ctx.paths);
+        self.world = level_dat::read(&self.ctx.paths, &self.world_level)
+            .ok()
+            .flatten();
+        if self.world.is_some() {
+            let group = self.build_world_group(sender);
+            self.page.add(&group);
+            self.groups.push(group);
+
+            // Learn whether the server is running (rows stay disabled until then).
+            let s = sender.clone();
+            relm4::spawn(async move {
+                let active = scope_active().await;
+                s.input(PropertiesInput::WorldLocked(active));
+            });
+        }
 
         let path = self.ctx.paths.server_file("server.properties");
         let text = match read_to_string_opt(&path) {
@@ -142,6 +198,79 @@ impl PropertiesPage {
         self.status = "Loaded".to_string();
     }
 
+    /// Apply a change to the world's `level.dat`. Refuses while the server runs.
+    fn mutate_world(&mut self, change: impl FnOnce(&mut WorldSettings)) {
+        if self.world_locked {
+            self.status = "Stop the server before changing world settings.".to_string();
+            return;
+        }
+        let Some(mut settings) = self.world else {
+            return;
+        };
+        change(&mut settings);
+        match level_dat::write(&self.ctx.paths, &self.world_level, &settings) {
+            Ok(()) => {
+                self.world = Some(settings);
+                self.status = "Saved to level.dat — effective on the next server start.".to_string();
+            }
+            Err(e) => self.status = format!("level.dat write failed: {e}"),
+        }
+    }
+
+    fn build_world_group(&mut self, sender: &ComponentSender<Self>) -> adw::PreferencesGroup {
+        let w = self.world.unwrap_or(WorldSettings {
+            hardcore: false,
+            difficulty: 2,
+            difficulty_locked: false,
+        });
+        let enabled = !self.world_locked;
+
+        let group = adw::PreferencesGroup::new();
+        group.set_title("World (level.dat)");
+        group.set_description(Some(
+            "Stored in the world itself, not server.properties. The server must be stopped to change these.",
+        ));
+
+        let hardcore = adw::SwitchRow::new();
+        hardcore.set_title("Hardcore");
+        hardcore.set_subtitle(
+            "Spectator on death, difficulty forced to hard. server.properties cannot change this after the world exists.",
+        );
+        hardcore.set_active(w.hardcore);
+        hardcore.set_sensitive(enabled);
+        let s = sender.clone();
+        hardcore.connect_active_notify(move |r| s.input(PropertiesInput::SetHardcore(r.is_active())));
+        group.add(&hardcore);
+        self.world_rows.push(hardcore.upcast::<gtk::Widget>());
+
+        let difficulty = adw::ComboRow::new();
+        difficulty.set_title("Difficulty (world)");
+        difficulty.set_subtitle("server.properties `difficulty` overrides this on start — keep them in sync.");
+        difficulty.set_model(Some(&gtk::StringList::new(&DIFFICULTIES)));
+        difficulty.set_selected(u32::from(w.difficulty.min(3)));
+        difficulty.set_sensitive(enabled);
+        let s = sender.clone();
+        difficulty.connect_selected_notify(move |r| {
+            s.input(PropertiesInput::SetDifficulty(r.selected().min(3) as u8));
+        });
+        group.add(&difficulty);
+        self.world_rows.push(difficulty.upcast::<gtk::Widget>());
+
+        let lock = adw::SwitchRow::new();
+        lock.set_title("Lock difficulty");
+        lock.set_subtitle("Players cannot change difficulty in-game. Not available in server.properties.");
+        lock.set_active(w.difficulty_locked);
+        lock.set_sensitive(enabled);
+        let s = sender.clone();
+        lock.connect_active_notify(move |r| {
+            s.input(PropertiesInput::SetLockDifficulty(r.is_active()));
+        });
+        group.add(&lock);
+        self.world_rows.push(lock.upcast::<gtk::Widget>());
+
+        group
+    }
+
     fn build_known_group(
         &self,
         props: &Properties,
@@ -154,12 +283,18 @@ impl PropertiesPage {
             let current = props.get(def.key).unwrap_or(def.default).to_string();
             let key = def.key.to_string();
             let s = sender.clone();
+            let help = if restart_required(def.key) {
+                format!("{} · takes effect on the next server start", def.help)
+            } else {
+                def.help.to_string()
+            };
+            let help = help.as_str();
 
             match def.kind {
                 FieldKind::Bool => {
                     let row = adw::SwitchRow::new();
                     row.set_title(def.label);
-                    row.set_tooltip_text(Some(def.help));
+                    row.set_tooltip_text(Some(help));
                     row.set_active(current.eq_ignore_ascii_case("true"));
                     row.connect_active_notify(move |r| {
                         s.input(PropertiesInput::Set(
@@ -183,7 +318,7 @@ impl PropertiesPage {
                         0,
                     );
                     row.set_title(def.label);
-                    row.set_tooltip_text(Some(def.help));
+                    row.set_tooltip_text(Some(help));
                     row.connect_value_notify(move |r| {
                         s.input(PropertiesInput::Set(
                             key.clone(),
@@ -202,7 +337,7 @@ impl PropertiesPage {
                     let refs: Vec<&str> = opts.iter().map(String::as_str).collect();
                     let row = adw::ComboRow::new();
                     row.set_title(def.label);
-                    row.set_tooltip_text(Some(def.help));
+                    row.set_tooltip_text(Some(help));
                     row.set_model(Some(&gtk::StringList::new(&refs)));
                     if let Some(pos) = opts.iter().position(|o| *o == current) {
                         row.set_selected(pos as u32);
@@ -217,7 +352,7 @@ impl PropertiesPage {
                 FieldKind::Text => {
                     let row = adw::EntryRow::new();
                     row.set_title(def.label);
-                    row.set_tooltip_text(Some(def.help));
+                    row.set_tooltip_text(Some(help));
                     row.set_text(&current);
                     row.connect_changed(move |r| {
                         s.input(PropertiesInput::Set(key.clone(), r.text().to_string()));
