@@ -33,23 +33,28 @@ logic can be reasoned about without a display.
 
 `Paths` is the single source of truth. Root resolution order:
 
-1. `$MCSM_ROOT` if set (created if missing).
-2. **Portable mode** — walk up from the executable, then the CWD, for a
-   `Cargo.toml` containing `mcsm` or a `.mcsm-root` marker: a clone of the repo
-   run in place → `<repo>/data/`.
+1. `$MCSM_ROOT` if set (created if missing) — used directly as the data dir.
+2. **Portable mode** — the *executable itself* is in a checkout: it sits under a
+   `target/` build directory with a `Cargo.toml` mentioning `mcsm` above it, or a
+   `.mcsm-root` marker file sits beside it (or in a parent). → `<repo>/data/`.
+   The working directory is deliberately **not** consulted, so an installed
+   binary launched from inside a clone still resolves to the installed root, not
+   the clone.
 3. **Installed mode** — none of the above, so the binary lives in `~/.local/bin`
-   or `/usr/bin` → `~/.local/share/MinecraftServerManager/`
-   (`$XDG_DATA_HOME`). Still one self-contained folder, just not next to the
-   binary.
+   or `/usr/bin` → `~/.local/share/MinecraftServerManager/` (`$XDG_DATA_HOME`).
+   Still one self-contained folder, just not next to the binary.
 4. The directory containing the executable (last resort).
 
-Everything runtime lives under `<root>/` (`<root>/data/` in portable mode).
+In portable mode runtime state is nested in `<root>/data/` so it stays out of
+the source tree; in every other case it sits directly in the resolved directory
+(`paths.data == paths.root`). `Paths::with_root` builds the first layout,
+`Paths::with_data_dir` the second.
 
 **Backups are the one thing that leaves the folder.** `state.backup_dir` (an
 `Option`, pinned to the resolved default on first run so it is never forgotten)
 points at `~/Documents/Minecraft Server Manager Backups/` by default — chosen so
 that deleting or moving the app folder never loses a world. It is editable in
-Settings and falls back to `<root>/backups` when there is no `~/Documents`.
+Settings and falls back to `<data>/backups` when there is no `~/Documents`.
 
 ## Packaging & install
 

@@ -76,11 +76,11 @@ the server still runs, but the ceiling becomes advisory).
 
 ## Where things live
 
-The app keeps **everything in one folder**:
+The app keeps **everything in one folder** (call it `<root>`):
 
-- run from a cloned repo → `./data/`
-- installed → `~/.local/share/MinecraftServerManager/`
-- or set `MCSM_ROOT=/some/path`
+- run from a cloned repo → `<root>` is `./data/` inside the checkout
+- installed → `<root>` is `~/.local/share/MinecraftServerManager/`
+- or set `MCSM_ROOT=/some/path` → `<root>` is that path
 
 ```
 <root>/
