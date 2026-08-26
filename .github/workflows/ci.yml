@@ -15,6 +15,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
+        # mcsm-gui needs libadwaita >= 1.5 (adw feature "v1_5"). ubuntu-latest
+        # (24.04) ships 1.5.x; if a future runner image lags, pin an older
+        # image or drop the feature rather than chasing a version-feature error.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
