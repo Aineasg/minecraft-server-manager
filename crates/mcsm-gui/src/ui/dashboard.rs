@@ -18,6 +18,13 @@ use crate::ui::widgets::gib;
 /// Restart no more than this many times before giving up.
 const MAX_RESTARTS: u32 = 3;
 
+/// Cap on console lines held in the view. When it is exceeded the oldest are
+/// dropped back to [`CONSOLE_TRIM_TO`]. The complete log is always on disk in
+/// `data/logs`; this only bounds the scrollback the widget has to render so a
+/// long-running or chatty server can't grow it without limit.
+const MAX_CONSOLE_LINES: i32 = 5_000;
+const CONSOLE_TRIM_TO: i32 = 4_000;
+
 /// Message from the model to the running supervisor task.
 #[derive(Debug)]
 enum Control {
@@ -473,6 +480,16 @@ impl DashboardPage {
     fn append(&self, text: &str) {
         let mut end = self.console.end_iter();
         self.console.insert(&mut end, text);
+
+        if self.console.line_count() > MAX_CONSOLE_LINES {
+            let mut start = self.console.start_iter();
+            if let Some(mut cut) = self
+                .console
+                .iter_at_line(self.console.line_count() - CONSOLE_TRIM_TO)
+            {
+                self.console.delete(&mut start, &mut cut);
+            }
+        }
     }
 
     fn scroll_console(&self) {
