@@ -64,6 +64,8 @@ pub struct DashboardPage {
 #[derive(Debug)]
 pub enum DashboardInput {
     Start,
+    /// Result of the `java -version` pre-flight kicked off by [`Start`].
+    JavaChecked(Result<String, String>),
     Stop,
     Restart,
     SendCommand(String),
@@ -260,8 +262,34 @@ impl Component for DashboardPage {
                     let _ = sender.output(DashboardOutput::OpenSettings);
                     return;
                 }
-                self.stopping = false;
-                self.spawn_supervisor(self.ctx.server_config(), &sender);
+                let java = self.ctx.state.borrow().java_command();
+                self.append("[manager] Checking Java…\n");
+                let sender = sender.clone();
+                relm4::spawn(async move {
+                    let r = mcsm_core::ops::server::check_java(&java)
+                        .await
+                        .map_err(|e| e.to_string());
+                    sender.input(DashboardInput::JavaChecked(r));
+                });
+            }
+            DashboardInput::JavaChecked(result) => {
+                if self.control.is_some() || self.orphan {
+                    return;
+                }
+                match result {
+                    Ok(banner) => {
+                        self.append(&format!("[manager] {banner}\n"));
+                        self.stopping = false;
+                        self.spawn_supervisor(self.ctx.server_config(), &sender);
+                    }
+                    Err(e) => {
+                        self.append(&format!(
+                            "[manager] Java check failed: {e}\n\
+                             [manager] Set a working Java path in Settings (Java 21+).\n"
+                        ));
+                        let _ = sender.output(DashboardOutput::OpenSettings);
+                    }
+                }
             }
             DashboardInput::Stop => {
                 if self.orphan {

@@ -393,6 +393,33 @@ async fn supervise(
     let _ = events.send(ServerEvent::Status(final_status)).await;
 }
 
+/// Check that `java` exists, runs, and is a JVM. Returns its first version
+/// line (`java -version` prints to stderr and exits 0). Used as a pre-flight so
+/// a wrong Java path is reported clearly instead of as a raw spawn failure.
+pub async fn check_java(java: &std::path::Path) -> Result<String> {
+    let output = Command::new(java)
+        .arg("-version")
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .map_err(|e| Error::Spawn(format!("cannot run {}: {e}", java.display())))?;
+    if !output.status.success() {
+        return Err(Error::Spawn(format!(
+            "{} -version exited with {}",
+            java.display(),
+            output.status
+        )));
+    }
+    let banner = String::from_utf8_lossy(&output.stderr);
+    let line = banner
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("unknown Java")
+        .trim()
+        .to_string();
+    Ok(line)
+}
+
 // --- systemd / cgroup helpers -------------------------------------------------
 
 /// True if `systemctl --user` can talk to a user manager.
@@ -485,6 +512,36 @@ mod tests {
         assert!(!is_ready_line(
             "[12:00:00] [Server thread/INFO]: Preparing spawn area: 74%"
         ));
+    }
+
+    #[tokio::test]
+    async fn check_java_rejects_a_bogus_path() {
+        let err = check_java(std::path::Path::new("/nonexistent/java-xyz"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot run"));
+    }
+
+    #[tokio::test]
+    async fn check_java_accepts_a_real_jvm_if_one_is_installed() {
+        // Best-effort: only assert when `java` is actually on PATH.
+        if let Ok(path) = which_java() {
+            let banner = check_java(&path).await.unwrap();
+            assert!(!banner.is_empty());
+        }
+    }
+
+    fn which_java() -> std::io::Result<PathBuf> {
+        let out = std::process::Command::new("sh")
+            .args(["-c", "command -v java"])
+            .output()?;
+        if out.status.success() {
+            Ok(PathBuf::from(
+                String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            ))
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no java"))
+        }
     }
 
     #[test]

@@ -77,6 +77,24 @@ impl BackupEntry {
     }
 }
 
+/// Delete leftover `*.tar.zst.part` files from a backup run that was killed
+/// before `tar` finished. They are scratch files, never valid archives, and
+/// [`create`] is the only thing that writes them and is never run concurrently.
+fn remove_stale_partials(dir: &Path) {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tar.zst.part")
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Existing backups in `dir`, newest first. A missing directory is empty.
 pub fn list(dir: &Path) -> Result<Vec<BackupEntry>> {
     if !dir.is_dir() {
@@ -114,6 +132,7 @@ pub async fn create(
     auto: bool,
 ) -> Result<BackupEntry> {
     std::fs::create_dir_all(backup_dir).map_err(|e| Error::io(backup_dir, e))?;
+    remove_stale_partials(backup_dir);
     let dirs = world_dirs(&paths.server, level_name);
     if dirs.is_empty() {
         return Err(Error::msg(format!(
@@ -273,6 +292,49 @@ mod tests {
         let restored = std::fs::read(region.join("r.0.0.mca")).unwrap();
         assert_eq!(restored, b"chunkdata");
         assert!(paths.server.join("world.pre-restore").is_dir());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn create_sweeps_orphan_partials() {
+        let root = std::env::temp_dir().join(format!(
+            "mcsm-bk-part-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = Paths::with_root(&root);
+        paths.ensure_dirs().unwrap();
+        std::fs::create_dir_all(paths.server.join("world").join("region")).unwrap();
+        std::fs::write(
+            paths.server.join("world").join("region").join("r.0.0.mca"),
+            b"x",
+        )
+        .unwrap();
+
+        let bdir = paths.backups.clone();
+        std::fs::write(bdir.join("world-20200101-000000.tar.zst.part"), b"junk").unwrap();
+        std::fs::write(
+            bdir.join("auto-world-20200101-000000.tar.zst.part"),
+            b"junk",
+        )
+        .unwrap();
+
+        create(&paths, &bdir, "world", false).await.unwrap();
+
+        let leftover: Vec<_> = std::fs::read_dir(&bdir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".part"))
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "orphan partials not swept: {leftover:?}"
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
