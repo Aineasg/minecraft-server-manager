@@ -51,17 +51,36 @@ pub fn read(paths: &Paths, level_name: &str) -> Result<Option<WorldSettings>> {
         return Ok(None);
     };
     let root: Value = fastnbt::from_bytes(&raw).map_err(nbt_err("parse level.dat"))?;
-    let Value::Compound(map) = &root else {
+    Ok(Some(read_settings(&root)?))
+}
+
+/// Pull the three managed settings out of a parsed `level.dat` root.
+fn read_settings(root: &Value) -> Result<WorldSettings> {
+    let Value::Compound(map) = root else {
         return Err(Error::msg("level.dat root is not a compound"));
     };
     let Some(Value::Compound(data)) = map.get("Data") else {
         return Err(Error::msg("level.dat has no `Data` compound"));
     };
-    Ok(Some(WorldSettings {
+    Ok(WorldSettings {
         hardcore: byte(data, "hardcore") != 0,
         difficulty: byte(data, "Difficulty").clamp(0, 3) as u8,
         difficulty_locked: byte(data, "DifficultyLocked") != 0,
-    }))
+    })
+}
+
+/// A copy of `root` with the three managed keys removed from `Data`, so two
+/// `level.dat` documents can be compared for changes to *everything else*.
+fn without_managed_keys(root: &Value) -> Value {
+    let mut root = root.clone();
+    if let Value::Compound(map) = &mut root {
+        if let Some(Value::Compound(data)) = map.get_mut("Data") {
+            for key in ["hardcore", "Difficulty", "DifficultyLocked"] {
+                data.remove(key);
+            }
+        }
+    }
+    root
 }
 
 /// Patch the world settings in place. The server must be stopped.
@@ -95,6 +114,29 @@ pub fn write(paths: &Paths, level_name: &str, settings: &WorldSettings) -> Resul
     }
 
     let nbt = fastnbt::to_bytes(&root).map_err(nbt_err("serialise level.dat"))?;
+
+    // Defensive re-read before anything touches the disk. fastnbt's `Value`
+    // round-trip is lossless on vanilla `level.dat` files (there are tests for
+    // it), but a bad write here costs a world, so every call re-parses the
+    // bytes it is about to persist and refuses if the request did not land or
+    // if any world data outside the three managed keys changed. On refusal the
+    // original file is still intact.
+    let reparsed: Value =
+        fastnbt::from_bytes(&nbt).map_err(nbt_err("verify re-encoded level.dat"))?;
+    if read_settings(&reparsed)? != *settings {
+        return Err(Error::msg(
+            "refusing to write level.dat: verification read-back did not match the request",
+        ));
+    }
+    let original: Value =
+        fastnbt::from_bytes(&raw).map_err(nbt_err("re-parse original level.dat"))?;
+    if without_managed_keys(&original) != without_managed_keys(&reparsed) {
+        return Err(Error::msg(
+            "refusing to write level.dat: re-encoding would change world data outside \
+             hardcore / Difficulty / DifficultyLocked",
+        ));
+    }
+
     let gz = gzip(&nbt)?;
 
     // Back up the current file before overwriting.
@@ -258,5 +300,135 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("no level.dat"));
         std::fs::remove_dir_all(&paths.root).ok();
+    }
+
+    /// A genuine `level.dat` from a fresh vanilla 1.21.4 world. See
+    /// `tests/fixtures/README.md`.
+    const REAL_LEVEL_DAT: &[u8] = include_bytes!("../../tests/fixtures/vanilla-1.21.4-level.dat");
+
+    fn place_real_level_dat(paths: &Paths, level: &str) {
+        let dir = paths.server.join(level);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("level.dat"), REAL_LEVEL_DAT).unwrap();
+    }
+
+    /// Decoding a real `level.dat` to `fastnbt::Value` and re-encoding it must
+    /// preserve every key, type and value — otherwise `write()` would silently
+    /// drop parts of the world (Player inventory, WorldGenSettings, GameRules,
+    /// empty typed lists) every time hardcore/difficulty is changed.
+    #[test]
+    fn real_leveldat_value_roundtrip_is_lossless() {
+        let raw = {
+            let mut out = Vec::new();
+            GzDecoder::new(REAL_LEVEL_DAT)
+                .read_to_end(&mut out)
+                .unwrap();
+            out
+        };
+
+        let before: Value = fastnbt::from_bytes(&raw).unwrap();
+        let reencoded = fastnbt::to_bytes(&before).unwrap();
+        let after: Value = fastnbt::from_bytes(&reencoded).unwrap();
+
+        let mut diffs = Vec::new();
+        diff_value("", &before, &after, &mut diffs);
+        assert!(
+            diffs.is_empty(),
+            "level.dat Value round-trip is lossy:\n{}",
+            diffs.join("\n")
+        );
+    }
+
+    /// `write()` on a real `level.dat` must change *only* the three managed
+    /// keys and leave every other byte of world state untouched.
+    #[test]
+    fn real_leveldat_write_only_touches_managed_keys() {
+        let paths = temp_paths();
+        place_real_level_dat(&paths, "world");
+        let world = paths.server.join("world");
+
+        let raw0 = read_nbt(&world.join("level.dat")).unwrap().unwrap();
+        let before: Value = fastnbt::from_bytes(&raw0).unwrap();
+        let orig = read(&paths, "world").unwrap().unwrap();
+
+        let target = WorldSettings {
+            hardcore: !orig.hardcore,
+            difficulty: (orig.difficulty + 1) % 4,
+            difficulty_locked: !orig.difficulty_locked,
+        };
+        write(&paths, "world", &target).unwrap();
+
+        let raw1 = read_nbt(&world.join("level.dat")).unwrap().unwrap();
+        let after: Value = fastnbt::from_bytes(&raw1).unwrap();
+
+        let mut diffs = Vec::new();
+        diff_value("", &before, &after, &mut diffs);
+        let managed = ["Data.hardcore", "Data.Difficulty", "Data.DifficultyLocked"];
+        let unexpected: Vec<_> = diffs
+            .iter()
+            .filter(|d| !managed.iter().any(|m| d.starts_with(&format!("{m}:"))))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "write() changed keys beyond the managed three: {unexpected:?}"
+        );
+        assert_eq!(read(&paths, "world").unwrap().unwrap(), target);
+        assert!(world.join("level.dat.bak").is_file());
+        std::fs::remove_dir_all(&paths.root).ok();
+    }
+
+    fn kind(v: &Value) -> &'static str {
+        match v {
+            Value::Byte(_) => "Byte",
+            Value::Short(_) => "Short",
+            Value::Int(_) => "Int",
+            Value::Long(_) => "Long",
+            Value::Float(_) => "Float",
+            Value::Double(_) => "Double",
+            Value::String(_) => "String",
+            Value::ByteArray(_) => "ByteArray",
+            Value::IntArray(_) => "IntArray",
+            Value::LongArray(_) => "LongArray",
+            Value::List(_) => "List",
+            Value::Compound(_) => "Compound",
+        }
+    }
+
+    fn diff_value(path: &str, a: &Value, b: &Value, out: &mut Vec<String>) {
+        match (a, b) {
+            (Value::Compound(am), Value::Compound(bm)) => {
+                for (k, av) in am {
+                    let p = if path.is_empty() {
+                        k.clone()
+                    } else {
+                        format!("{path}.{k}")
+                    };
+                    match bm.get(k) {
+                        Some(bv) => diff_value(&p, av, bv, out),
+                        None => out.push(format!("{p}: dropped ({} in original)", kind(av))),
+                    }
+                }
+                for k in bm.keys() {
+                    if !am.contains_key(k) {
+                        out.push(format!("{path}.{k}: appeared (not in original)"));
+                    }
+                }
+            }
+            (Value::List(al), Value::List(bl)) => {
+                if al.len() != bl.len() {
+                    out.push(format!("{path}: list length {} -> {}", al.len(), bl.len()));
+                }
+                for (i, (av, bv)) in al.iter().zip(bl).enumerate() {
+                    diff_value(&format!("{path}[{i}]"), av, bv, out);
+                }
+            }
+            _ => {
+                if kind(a) != kind(b) {
+                    out.push(format!("{path}: type {} -> {}", kind(a), kind(b)));
+                } else if a != b {
+                    out.push(format!("{path}: value changed ({})", kind(a)));
+                }
+            }
+        }
     }
 }
