@@ -55,6 +55,9 @@ pub enum Status {
 /// Something the running server did.
 #[derive(Debug, Clone)]
 pub enum ServerEvent {
+    /// Emitted once, immediately after a successful launch. `hard_cap` is false
+    /// when we had to fall back to running without a systemd scope.
+    Launched { hard_cap: bool },
     Status(Status),
     /// A coalesced batch of console lines (stdout and stderr merged).
     Log(Vec<String>),
@@ -144,6 +147,11 @@ impl ServerHandle {
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
 
+        let _ = events
+            .send(ServerEvent::Launched {
+                hard_cap: use_scope,
+            })
+            .await;
         let _ = events.send(ServerEvent::Status(Status::Starting)).await;
 
         let stop_requested = Arc::new(Notify::new());

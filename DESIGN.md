@@ -1,0 +1,145 @@
+# Design
+
+Decisions and structure for the Minecraft Server Manager. Written to be read
+alongside the code, not instead of it.
+
+## Goals
+
+- **One folder.** Source, build output, and all runtime data under a single
+  directory. Deleting it is a complete uninstall. Nothing in `~/.config`,
+  `~/.cache`, `dconf`, or `~/.local`. The GTK toolkit's own shared caches are
+  the one thing outside our control and are shared with every other GTK app.
+- **Native.** GTK4 + libadwaita, so it fits a GNOME/KDE desktop. Rust, single
+  binary.
+- **Self-contained runtime.** No panel, no web server, no daemon. The app is
+  the UI and the supervisor.
+- **Hard memory ceiling.** App + JVM + world must fit in a user-set limit
+  (default 9 GiB), enforced by the kernel, not hoped for.
+- **Human-editable code and config.** `state.toml` and `server.properties` are
+  meant to be opened in an editor; the code is split into small, focused,
+  tested modules.
+
+## Crate split
+
+| crate | contains | tested |
+|---|---|---|
+| `mcsm-core` | paths, `state.toml`, `server.properties` round-trip, memory-budget math, access-file models, Fabric/Mojang/Modrinth HTTP clients, jar hashing + `fabric.mod.json` reading, install/mods/backup/server-process operations | 53 unit tests, no network |
+| `mcsm-gui` | `main.rs`, a `Context` shared by every page, and one Relm4 component per page | compiles; logic lives in core |
+
+`mcsm-core` has no GTK dependency, so its tests run in milliseconds and the
+logic can be reasoned about without a display.
+
+## Directory layout (`mcsm_core::paths::Paths`)
+
+`Paths` is the single source of truth. Root resolution order:
+
+1. `$MCSM_ROOT` if set.
+2. Walk up from the executable, then from the CWD, for a `Cargo.toml`
+   containing `mcsm` or a `.mcsm-root` marker.
+3. The directory containing the executable (shipped-binary fallback).
+
+Everything runtime lives under `<root>/data/`.
+
+## Server process supervision (`mcsm_core::ops::server`)
+
+The JVM is launched as:
+
+```
+systemd-run --user --scope --unit=mcsm-server.scope \
+  -p MemoryMax=<>M -p MemoryHigh=<>M -p MemorySwapMax=0 \
+  --collect --quiet --working-directory=<data/server> \
+  -- <java> <jvm args> -jar fabric-server-launch.jar nogui
+```
+
+- **Fixed unit name** so a JVM that outlived a crashed GUI can always be found
+  (`scope_active`) and re-attached to or stopped, instead of starting a second
+  JVM on the same world.
+- `--scope` (not a service) keeps stdio wired to us for the console pane;
+  `--collect` lets a failed scope be reused; `--quiet` keeps systemd chatter
+  out of the log.
+- **Log backpressure:** a reader task merges stdout+stderr and flushes batched
+  lines on a 60 ms timer, capped at 500 lines per batch, so a modded startup
+  spew cannot lock the UI.
+- **Memory:** a 1 Hz task reads the scope's cgroup `memory.current` /
+  `memory.peak` — one file read for the whole process tree, no `/proc` RSS
+  summing.
+- **OOM:** on exit the scope's `memory.events` `oom_kill` counter is checked.
+  Auto-restart never runs after an OOM kill (that is a loop); the UI tells the
+  user to lower the heap or drop mods.
+- **No systemd:** falls back to a direct `java` child with no hard cap and a
+  visible warning. The rest of the supervision is unchanged.
+
+The module only *reports* via `ServerEvent`; restart policy lives in the
+Dashboard page.
+
+## Memory budget (`mcsm_core::memory`)
+
+One ceiling in, concrete limits out. Encodes `JVM RSS ≈ Xmx × 1.25 + 512 MiB`
+(metaspace, code cache, ~50-100 thread stacks, Netty direct buffers). `-Xmx` is
+sized so projected RSS stays under `MemoryHigh`; the slider maximum keeps it
+under `MemoryMax`. `-Xms` is set below `-Xmx` on purpose — with no
+`AlwaysPreTouch` there is nothing to gain from committing the whole heap up
+front, and a smaller initial commit is safer under the cap.
+
+## `server.properties` (`mcsm_core::properties`)
+
+Parsed into an ordered list of lines; only the value span of changed keys is
+rewritten, every other line is reproduced byte-for-byte. Handles the real Java
+`.properties` rules: `=` and `:` separators with surrounding whitespace,
+backslash escapes, `\uXXXX` for non-Latin-1 (so a `§` colour code in the MOTD
+survives a round trip), `#`/`!` comments. Line continuations are the one
+unsupported feature — `server.properties` never uses them.
+
+`properties_catalog` is a static table (key, label, type, range, default, help)
+the GUI turns into a typed form. Keys not in the catalogue still round-trip;
+the GUI shows them as plain text fields in an "Other" group.
+
+## Mods (`mcsm_core::net::modrinth`, `mcsm_core::ops::mods`)
+
+- **Search:** `GET /v2/search` with facets `project_type:mod`,
+  `categories:fabric`, `versions:<mc>`, and `server_side:required|optional` to
+  keep client-only mods out.
+- **Dependencies:** a breadth-first walk with a visited-set (cycles and
+  diamonds terminate). `required` is resolved recursively, `incompatible` is
+  recorded for the caller to check against installed mods, `optional` is
+  offered but not added, `embedded` is ignored.
+- **Local jars:** identified by SHA-512 via `POST /v2/version_files`, so mods
+  dropped in by hand still get enable/disable/update.
+- **Updates:** one bulk `POST /v2/version_files/update` for the whole `mods/`
+  directory.
+- **Enable/disable:** rename `foo.jar` ⇄ `foo.jar.disabled`.
+
+## Install (`mcsm_core::ops::install`)
+
+No Fabric installer jar. `meta.fabricmc.net/v2/versions/loader/<mc>/<loader>/<installer>/server/jar`
+returns a ready-to-run launcher jar; the vanilla server jar comes from the
+Mojang piston manifest and is SHA-1 verified. Both are cached by name under
+`data/cache/` and copied into `data/server/`.
+
+## Backups (`mcsm_core::ops::backup`)
+
+`tar --zstd` of the `<level-name>` directory (plus `_nether` / `_the_end`
+siblings if a setup keeps them separate). Restore moves the live world aside to
+`<name>.pre-restore` first, and refuses to run while the server scope is active.
+
+## GUI (`mcsm-gui`)
+
+Relm4 (Elm-style) over gtk4-rs + libadwaita. `adw::NavigationSplitView` with a
+sidebar `gtk::ListBox` switching pages in an `adw::ViewStack`. A top
+`adw::Banner` prompts to install a server / accept the EULA.
+
+`Context` (paths + HTTP clients + `Rc<RefCell<AppState>>`) is cloned into every
+page. `AppState` is single-`RefCell` rather than a mutex because the GTK main
+loop is single-threaded; background work is handed owned copies.
+
+Pages that do I/O or network are full `Component`s and run it through
+`sender.command(...)`; the results come back as messages. Pages with dynamic
+row lists (Properties, Access, Mods, Backups) build their `adw::PreferencesGroup`s
+imperatively and rebuild on change — simpler here than a factory.
+
+## Deliberately out of scope for v1
+
+- Multiple server instances (single server, by request).
+- Scheduled backups (the module is structured to allow a timer later).
+- CurseForge (Modrinth only — clean API, no auth).
+- Syntax highlighting in the raw file editor (plain monospace `TextView`).
