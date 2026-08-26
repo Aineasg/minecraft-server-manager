@@ -4,7 +4,9 @@
 use std::time::Duration;
 
 use adw::prelude::*;
-use mcsm_core::ops::server::{scope_active, ServerConfig, ServerEvent, ServerHandle, Status};
+use mcsm_core::ops::server::{
+    scope_active, stop_orphan_scope, ServerConfig, ServerEvent, ServerHandle, Status, SCOPE_UNIT,
+};
 use relm4::prelude::*;
 use tokio::sync::mpsc;
 
@@ -35,6 +37,9 @@ pub struct DashboardPage {
     /// A user-requested restart is in flight: relaunch even on a clean exit.
     pending_restart: bool,
     restart_count: u32,
+    /// A server scope is active that this app did not start (previous session,
+    /// or launched by hand). We can stop it but cannot stream its console.
+    orphan: bool,
     console: gtk::TextBuffer,
     console_view: gtk::TextView,
 }
@@ -48,6 +53,9 @@ pub enum DashboardInput {
     ClearConsole,
     /// Settings or install state changed.
     Reload,
+    /// A server scope from outside this app was found on startup.
+    OrphanDetected,
+    OrphanStopped(Result<(), String>),
 }
 
 #[derive(Debug)]
@@ -79,7 +87,8 @@ impl Component for DashboardPage {
                         connect_clicked => DashboardInput::Start,
                     },
                     gtk::Button {
-                        set_label: "Stop",
+                        #[watch]
+                        set_label: if model.orphan { "Stop external" } else { "Stop" },
                         #[watch]
                         set_sensitive: model.is_active(),
                         connect_clicked => DashboardInput::Stop,
@@ -87,7 +96,7 @@ impl Component for DashboardPage {
                     gtk::Button {
                         set_label: "Restart",
                         #[watch]
-                        set_sensitive: model.is_active(),
+                        set_sensitive: model.control.is_some(),
                         connect_clicked => DashboardInput::Restart,
                     },
                 },
@@ -153,7 +162,7 @@ impl Component for DashboardPage {
                 gtk::Entry {
                     set_placeholder_text: Some("Type a server command and press Enter (e.g. say hello)"),
                     #[watch]
-                    set_sensitive: model.status == Status::Running,
+                    set_sensitive: model.control.is_some(),
                     connect_activate[sender] => move |entry| {
                         let text = entry.text().to_string();
                         if !text.trim().is_empty() {
@@ -185,16 +194,18 @@ impl Component for DashboardPage {
             stopping: false,
             pending_restart: false,
             restart_count: 0,
+            orphan: false,
             console,
             console_view: console_view.clone(),
         };
 
-        // Adopt a server left running by a previous (crashed) session.
+        // Notice a server scope left behind by a previous (crashed) session or
+        // started by hand. We cannot stream its console, but we can stop it.
         {
             let sender = sender.clone();
             relm4::spawn_local(async move {
                 if scope_active().await {
-                    sender.input(DashboardInput::Start);
+                    sender.input(DashboardInput::OrphanDetected);
                 }
             });
         }
@@ -206,7 +217,7 @@ impl Component for DashboardPage {
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>, _root: &Self::Root) {
         match msg {
             DashboardInput::Start => {
-                if self.control.is_some() {
+                if self.control.is_some() || self.orphan {
                     return;
                 }
                 if !self.ctx.state.borrow().ready_to_launch() {
@@ -218,6 +229,16 @@ impl Component for DashboardPage {
                 self.spawn_supervisor(self.ctx.server_config(), &sender);
             }
             DashboardInput::Stop => {
+                if self.orphan {
+                    self.append("[manager] Stopping the external server scope…\n");
+                    let s = sender.clone();
+                    relm4::spawn_local(async move {
+                        s.input(DashboardInput::OrphanStopped(
+                            stop_orphan_scope().await.map_err(|e| e.to_string()),
+                        ));
+                    });
+                    return;
+                }
                 self.stopping = true;
                 self.pending_restart = false;
                 self.restart_count = 0;
@@ -241,6 +262,24 @@ impl Component for DashboardPage {
                 // Nothing cached that needs refreshing while stopped; the next
                 // Start picks up new settings automatically.
             }
+            DashboardInput::OrphanDetected => {
+                self.orphan = true;
+                self.status = Status::Running;
+                self.append(&format!(
+                    "[manager] A server is already running under {SCOPE_UNIT} (previous session or started by hand). \
+                     Live console and memory are unavailable for it; use “Stop external” to shut it down.\n"
+                ));
+            }
+            DashboardInput::OrphanStopped(result) => {
+                match result {
+                    Ok(()) => {
+                        self.orphan = false;
+                        self.status = Status::Stopped;
+                        self.append("[manager] External server stopped.\n");
+                    }
+                    Err(e) => self.append(&format!("[manager] Could not stop it: {e}\n")),
+                }
+            }
         }
         self.scroll_console();
     }
@@ -260,6 +299,14 @@ impl Component for DashboardPage {
                 } else {
                     "[manager] user systemd unavailable — running WITHOUT a hard memory cap.\n"
                 });
+            }
+            ServerEvent::LaunchFailed(why) => {
+                self.control = None;
+                self.status = Status::Crashed;
+                self.stopping = false;
+                self.pending_restart = false;
+                self.restart_count = 0;
+                self.append(&format!("[manager] Could not start the server: {why}\n"));
             }
             ServerEvent::Status(s) => self.status = s,
             ServerEvent::Log(lines) => {
@@ -327,11 +374,11 @@ impl Component for DashboardPage {
 
 impl DashboardPage {
     fn can_start(&self) -> bool {
-        self.control.is_none() && self.ctx.state.borrow().ready_to_launch()
+        self.control.is_none() && !self.orphan && self.ctx.state.borrow().ready_to_launch()
     }
 
     fn is_active(&self) -> bool {
-        self.control.is_some()
+        self.control.is_some() || self.orphan
     }
 
     fn status_text(&self) -> String {
@@ -395,11 +442,7 @@ impl DashboardPage {
                 let (handle, _outcome) = match ServerHandle::start(config, evt_tx).await {
                     Ok(v) => v,
                     Err(e) => {
-                        let _ = out.send(ServerEvent::Warning(format!("launch failed: {e}")));
-                        let _ = out.send(ServerEvent::Exited {
-                            code: None,
-                            oom_killed: false,
-                        });
+                        let _ = out.send(ServerEvent::LaunchFailed(e.to_string()));
                         return;
                     }
                 };

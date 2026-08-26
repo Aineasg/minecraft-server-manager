@@ -23,6 +23,10 @@ pub struct SettingsPage {
     selected_loader: Option<String>,
     installing: bool,
     status_line: String,
+    /// Created once; the heap bounds are adjusted in place when the ceiling
+    /// changes, never rebuilt on every view update.
+    ceiling_adj: gtk::Adjustment,
+    heap_adj: gtk::Adjustment,
 }
 
 #[derive(Debug)]
@@ -131,20 +135,15 @@ impl Component for SettingsPage {
                 #[watch]
                 set_description: Some(model.budget_description().as_str()),
 
-                #[name = "ceiling_row"]
                 adw::SpinRow {
                     set_title: "Total ceiling (GiB)",
                     set_subtitle: "Hard limit for the app, the JVM and the world combined",
-                    set_adjustment: Some(&gtk::Adjustment::new(9.0, 2.0, 64.0, 1.0, 1.0, 0.0)),
-                    #[watch]
-                    #[block_signal(ceiling_changed)]
-                    set_value: model.ctx.state.borrow().memory.total_mib as f64 / 1024.0,
+                    set_adjustment: Some(&model.ceiling_adj),
                     connect_value_notify[sender] => move |row| {
                         sender.input(SettingsInput::TotalCeilingChanged(row.value()));
-                    } @ceiling_changed,
+                    },
                 },
 
-                #[name = "heap_row"]
                 adw::SpinRow {
                     set_title: "Java heap -Xmx (MiB)",
                     #[watch]
@@ -153,20 +152,10 @@ impl Component for SettingsPage {
                         model.budget().xmx_min_mib.min(model.budget().xmx_max_mib),
                         model.budget().xmx_max_mib
                     ),
-                    #[watch]
-                    #[block_signal(heap_changed)]
-                    set_adjustment: Some(&gtk::Adjustment::new(
-                        model.budget().xmx_mib as f64,
-                        model.budget().xmx_min_mib.min(model.budget().xmx_max_mib) as f64,
-                        model.budget().xmx_max_mib as f64,
-                        256.0, 256.0, 0.0,
-                    )),
-                    #[watch]
-                    #[block_signal(heap_changed)]
-                    set_value: model.budget().xmx_mib as f64,
+                    set_adjustment: Some(&model.heap_adj),
                     connect_value_notify[sender] => move |row| {
                         sender.input(SettingsInput::HeapChanged(row.value()));
-                    } @heap_changed,
+                    },
                 },
 
                 #[name = "gc_row"]
@@ -239,6 +228,23 @@ impl Component for SettingsPage {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let state = ctx.state.borrow();
+        let budget = state.budget();
+        let ceiling_adj = gtk::Adjustment::new(
+            state.memory.total_mib as f64 / 1024.0,
+            2.0,
+            64.0,
+            1.0,
+            1.0,
+            0.0,
+        );
+        let heap_adj = gtk::Adjustment::new(
+            budget.xmx_mib as f64,
+            budget.xmx_min_mib.min(budget.xmx_max_mib) as f64,
+            budget.xmx_max_mib as f64,
+            256.0,
+            256.0,
+            0.0,
+        );
         let model = SettingsPage {
             selected_mc: state.minecraft_version.clone(),
             selected_loader: state.loader_version.clone(),
@@ -248,6 +254,8 @@ impl Component for SettingsPage {
             loader_versions: Vec::new(),
             installing: false,
             status_line: "Loading available versions…".to_string(),
+            ceiling_adj,
+            heap_adj,
             ctx: ctx.clone(),
         };
         drop(state);
@@ -305,18 +313,24 @@ impl Component for SettingsPage {
             }
             SettingsInput::TotalCeilingChanged(gib_value) => {
                 let mib = (gib_value * 1024.0).round() as u64;
-                let mut st = self.ctx.state.borrow_mut();
-                st.memory.total_mib = mib;
-                // Re-clamp any explicit heap request into the new budget.
-                if let Some(x) = st.memory.xmx_mib {
-                    let b = MemoryBudget::new(mib, Some(x));
-                    st.memory.xmx_mib = Some(b.xmx_mib);
+                {
+                    let mut st = self.ctx.state.borrow_mut();
+                    st.memory.total_mib = mib;
+                    // Re-clamp any explicit heap request into the new budget.
+                    if let Some(x) = st.memory.xmx_mib {
+                        st.memory.xmx_mib = Some(MemoryBudget::new(mib, Some(x)).xmx_mib);
+                    }
                 }
+                self.sync_heap_adjustment();
             }
             SettingsInput::HeapChanged(mib) => {
                 let total = self.ctx.state.borrow().memory.total_mib;
-                let b = MemoryBudget::new(total, Some(mib.round() as u64));
-                self.ctx.state.borrow_mut().memory.xmx_mib = Some(b.xmx_mib);
+                let clamped = MemoryBudget::new(total, Some(mib.round() as u64)).xmx_mib;
+                if self.ctx.state.borrow().memory.xmx_mib == Some(clamped) {
+                    return;
+                }
+                self.ctx.state.borrow_mut().memory.xmx_mib = Some(clamped);
+                self.sync_heap_adjustment();
             }
             SettingsInput::JavaPathEdited(text) => {
                 let trimmed = text.trim();
@@ -414,6 +428,16 @@ impl Component for SettingsPage {
 impl SettingsPage {
     fn budget(&self) -> MemoryBudget {
         self.ctx.state.borrow().budget()
+    }
+
+    /// Move the heap spinner's bounds and value to match the current budget,
+    /// in place (the adjustment is never rebuilt).
+    fn sync_heap_adjustment(&self) {
+        let b = self.budget();
+        self.heap_adj
+            .set_lower(b.xmx_min_mib.min(b.xmx_max_mib) as f64);
+        self.heap_adj.set_upper(b.xmx_max_mib as f64);
+        self.heap_adj.set_value(b.xmx_mib as f64);
     }
 
     fn budget_description(&self) -> String {

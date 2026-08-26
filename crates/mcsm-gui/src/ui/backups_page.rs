@@ -96,6 +96,13 @@ impl Component for BackupsPage {
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
+                            if scope_active().await {
+                                let _ = out.send(BackupsInput::TaskDone(Err(
+                                    "Stop the server first — archiving a live world can produce a torn backup."
+                                        .to_string(),
+                                )));
+                                return;
+                            }
                             let r = backup::create(&ctx.paths, &level)
                                 .await
                                 .map(|e| format!("Created {}", e.file_name))

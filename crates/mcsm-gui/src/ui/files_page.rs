@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use adw::prelude::*;
+use gtk::glib::SignalHandlerId;
 use mcsm_core::util::write_atomic;
 use relm4::prelude::*;
 
@@ -24,6 +25,9 @@ pub struct FilesPage {
     status: String,
     list: gtk::ListBox,
     buffer: gtk::TextBuffer,
+    /// The `changed` handler on `buffer`, blocked while we load a file so that
+    /// programmatic `set_text` doesn't mark the fresh content dirty.
+    changed_handler: SignalHandlerId,
 }
 
 #[derive(Debug)]
@@ -108,10 +112,10 @@ impl Component for FilesPage {
         let list = gtk::ListBox::new();
         let buffer = gtk::TextBuffer::new(None);
         let editor = gtk::TextView::with_buffer(&buffer);
-        {
+        let changed_handler = {
             let sender = sender.clone();
-            buffer.connect_changed(move |_| sender.input(FilesInput::MarkDirty));
-        }
+            buffer.connect_changed(move |_| sender.input(FilesInput::MarkDirty))
+        };
 
         let mut model = FilesPage {
             ctx,
@@ -122,6 +126,7 @@ impl Component for FilesPage {
             status: String::new(),
             list: list.clone(),
             buffer,
+            changed_handler,
         };
         model.rescan();
         model.populate_list();
@@ -194,6 +199,8 @@ impl FilesPage {
         self.dirty = false;
 
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        // Block the dirty-tracking handler: this content is what's on disk.
+        self.buffer.block_signal(&self.changed_handler);
         match std::fs::read(path) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(text) if size <= MAX_EDIT_BYTES => {
@@ -217,6 +224,7 @@ impl FilesPage {
                 self.status = format!("Could not read file: {e}");
             }
         }
+        self.buffer.unblock_signal(&self.changed_handler);
     }
 }
 

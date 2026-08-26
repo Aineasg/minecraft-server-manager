@@ -193,15 +193,20 @@ impl PropertiesPage {
                     group.add(&row);
                 }
                 FieldKind::Choice(options) => {
-                    let list = gtk::StringList::new(options);
+                    // Show exactly what the file says even if it is not one of the
+                    // known options (older worlds carry values like `level-type=default`).
+                    let mut opts: Vec<String> = options.iter().map(|s| (*s).to_string()).collect();
+                    if !opts.contains(&current) {
+                        opts.push(current.clone());
+                    }
+                    let refs: Vec<&str> = opts.iter().map(String::as_str).collect();
                     let row = adw::ComboRow::new();
                     row.set_title(def.label);
                     row.set_tooltip_text(Some(def.help));
-                    row.set_model(Some(&list));
-                    if let Some(pos) = options.iter().position(|o| *o == current) {
+                    row.set_model(Some(&gtk::StringList::new(&refs)));
+                    if let Some(pos) = opts.iter().position(|o| *o == current) {
                         row.set_selected(pos as u32);
                     }
-                    let opts: Vec<String> = options.iter().map(|s| (*s).to_string()).collect();
                     row.connect_selected_notify(move |r| {
                         if let Some(v) = opts.get(r.selected() as usize) {
                             s.input(PropertiesInput::Set(key.clone(), v.clone()));

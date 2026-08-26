@@ -6,7 +6,7 @@
 //! again.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 use crate::hash::sha512_hex;
@@ -197,19 +197,11 @@ pub async fn check_updates(
     Ok(latest)
 }
 
-/// Names of jars in `dir` that would collide with a fresh scan (helper for the UI).
-#[must_use]
-pub fn is_mod_jar(path: &Path) -> bool {
-    path.extension().is_some_and(|e| e == "jar")
-        || path
-            .to_string_lossy()
-            .ends_with(&format!(".jar{DISABLED_SUFFIX}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write as _;
+    use std::path::Path;
 
     fn write_jar(dir: &Path, name: &str, mod_id: &str) {
         let path = dir.join(name);

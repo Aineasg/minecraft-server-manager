@@ -58,6 +58,10 @@ pub enum ServerEvent {
     /// Emitted once, immediately after a successful launch. `hard_cap` is false
     /// when we had to fall back to running without a systemd scope.
     Launched { hard_cap: bool },
+    /// The process never started (bad `java`, refused scope, missing jar).
+    /// Distinct from [`ServerEvent::Exited`] so the caller never treats a
+    /// failed launch as a crash to auto-restart.
+    LaunchFailed(String),
     Status(Status),
     /// A coalesced batch of console lines (stdout and stderr merged).
     Log(Vec<String>),
