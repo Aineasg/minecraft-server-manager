@@ -78,6 +78,17 @@ impl Default for MemorySettings {
     }
 }
 
+/// The outcome of [`AppState::resolve_backup_dir`].
+#[derive(Debug, Clone)]
+pub struct ResolvedBackupDir {
+    /// The directory backups will actually be written to.
+    pub path: std::path::PathBuf,
+    /// `Some(configured)` when the configured folder was unusable and
+    /// [`path`](Self::path) is the `<data>/backups` fallback; `None` when the
+    /// configured folder is fine and in use.
+    pub fell_back_from: Option<std::path::PathBuf>,
+}
+
 /// Garbage-collector tuning preset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -173,11 +184,41 @@ impl AppState {
     }
 
     /// Where backups are written: the explicit setting, or the default.
+    ///
+    /// This is the *configured* location and does no I/O — it can point at a
+    /// folder that no longer exists or is not writable. Callers about to write
+    /// a backup should use [`resolve_backup_dir`](Self::resolve_backup_dir).
     #[must_use]
     pub fn backup_dir(&self, paths: &crate::Paths) -> std::path::PathBuf {
         self.backup_dir
             .clone()
             .unwrap_or_else(|| paths.default_backup_dir())
+    }
+
+    /// The backup directory to actually use right now, healing a broken one.
+    ///
+    /// The configured [`backup_dir`](Self::backup_dir) can stop working long
+    /// after it was set — its drive is unmounted, it came from another machine,
+    /// it was hand-edited wrong. Rather than let every backup fail forever,
+    /// probe it: if it cannot be created or written to, fall back to
+    /// `<data>/backups` (the app made that directory, so it is always usable).
+    /// The configured setting is left untouched, so backups return to it on
+    /// their own once it works again.
+    #[must_use]
+    pub fn resolve_backup_dir(&self, paths: &crate::Paths) -> ResolvedBackupDir {
+        let configured = self.backup_dir(paths);
+        if crate::util::dir_is_writable(&configured) {
+            return ResolvedBackupDir {
+                path: configured,
+                fell_back_from: None,
+            };
+        }
+        let fallback = paths.backups.clone();
+        let _ = std::fs::create_dir_all(&fallback);
+        ResolvedBackupDir {
+            path: fallback,
+            fell_back_from: Some(configured),
+        }
     }
 
     /// The `java` invocation to use.
@@ -315,6 +356,47 @@ mod tests {
         assert!(s.eula_accepted, "recognised fields survive");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_backup_dir_uses_a_writable_configured_folder() {
+        let root = std::env::temp_dir().join(format!("mcsm-rbd-ok-{}", std::process::id()));
+        let paths = crate::Paths::with_root(&root);
+        paths.ensure_dirs().unwrap();
+        let chosen = root.join("my-backups");
+
+        let state = AppState {
+            backup_dir: Some(chosen.clone()),
+            ..AppState::default()
+        };
+        let resolved = state.resolve_backup_dir(&paths);
+        assert_eq!(resolved.path, chosen);
+        assert!(resolved.fell_back_from.is_none());
+        assert!(chosen.is_dir(), "a writable configured folder is created");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resolve_backup_dir_falls_back_when_the_configured_folder_is_unusable() {
+        let root = std::env::temp_dir().join(format!("mcsm-rbd-bad-{}", std::process::id()));
+        let paths = crate::Paths::with_root(&root);
+        paths.ensure_dirs().unwrap();
+
+        // A regular file where a directory is expected: create_dir_all fails on it.
+        let blocked = root.join("blocked");
+        std::fs::write(&blocked, b"not a dir").unwrap();
+
+        let state = AppState {
+            backup_dir: Some(blocked.clone()),
+            ..AppState::default()
+        };
+        let resolved = state.resolve_backup_dir(&paths);
+        assert_eq!(resolved.path, paths.backups);
+        assert_eq!(resolved.fell_back_from.as_deref(), Some(blocked.as_path()));
+        assert!(paths.backups.is_dir());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

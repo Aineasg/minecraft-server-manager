@@ -30,10 +30,17 @@ impl Context {
     pub fn new(paths: Paths, mut state: AppState) -> anyhow::Result<Self> {
         let http = Http::new()?;
         // Pin the backup location the first time so it is never forgotten, even
-        // if this folder is later deleted and recreated somewhere else.
+        // if this folder is later deleted and recreated somewhere else — but
+        // only once the default is confirmed usable. Freezing an unwritable
+        // path here (e.g. `dirs::document_dir()` resolving somewhere odd) is
+        // what would otherwise make every backup fall back forever; leaving it
+        // `None` lets `backup_dir()` re-resolve the default each run instead.
         if state.backup_dir.is_none() {
-            state.backup_dir = Some(paths.default_backup_dir());
-            let _ = state.save(&paths.state_file);
+            let default = paths.default_backup_dir();
+            if mcsm_core::util::dir_is_writable(&default) {
+                state.backup_dir = Some(default);
+                let _ = state.save(&paths.state_file);
+            }
         }
         Ok(Self {
             modrinth: Modrinth::new(http.clone()),
@@ -48,9 +55,15 @@ impl Context {
         self.state.borrow().save(&self.paths.state_file)
     }
 
-    /// The directory world backups are written to.
+    /// The configured backup directory (no I/O — may not exist or be writable).
     pub fn backup_dir(&self) -> PathBuf {
         self.state.borrow().backup_dir(&self.paths)
+    }
+
+    /// The backup directory to actually use now, falling back to
+    /// `<data>/backups` when the configured one is not writable.
+    pub fn resolve_backup_dir(&self) -> mcsm_core::state::ResolvedBackupDir {
+        self.state.borrow().resolve_backup_dir(&self.paths)
     }
 
     /// `(minecraft_version, loader_version)` if the server is installed.

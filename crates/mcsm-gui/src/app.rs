@@ -81,6 +81,8 @@ pub enum AppMsg {
     AutoBackup,
     /// A backup was taken; refresh the Backups list.
     ReloadBackups,
+    /// A backup attempt finished — hand the outcome to the Backups page.
+    BackupDone(Result<String, String>),
     /// Player access page wants a console command run on the live server.
     RunServerCommand(String),
     /// Open the data folder in the file manager.
@@ -168,7 +170,7 @@ impl Component for App {
                 .launch(ctx.clone())
                 .forward(sender.input_sender(), |out| match out {
                     DashboardOutput::OpenSettings => AppMsg::ShowPage(SETTINGS_INDEX),
-                    DashboardOutput::BackupsChanged => AppMsg::ReloadBackups,
+                    DashboardOutput::BackupDone(result) => AppMsg::BackupDone(result),
                 });
         let mods = ModsPage::builder().launch(ctx.clone()).detach();
         let properties = PropertiesPage::builder().launch(ctx.clone()).detach();
@@ -270,6 +272,9 @@ impl Component for App {
             }
             AppMsg::ReloadBackups => {
                 let _ = self.backups.sender().send(BackupsInput::Reload);
+            }
+            AppMsg::BackupDone(result) => {
+                let _ = self.backups.sender().send(BackupsInput::BackupDone(result));
             }
             AppMsg::RunServerCommand(cmd) => {
                 let _ = self

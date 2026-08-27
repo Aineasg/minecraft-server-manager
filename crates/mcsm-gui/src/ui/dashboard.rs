@@ -61,6 +61,9 @@ pub struct DashboardPage {
     orphan: bool,
     /// A backup task is running; a second one must not start (see [`Self::run_backup`]).
     backup_in_flight: bool,
+    /// Set for the duration of a backup when its target folder fell back from
+    /// an unwritable configured one, so the outcome message can explain it.
+    backup_note: Option<String>,
     console: gtk::TextBuffer,
     console_view: gtk::TextView,
 }
@@ -94,8 +97,10 @@ pub enum DashboardInput {
 #[derive(Debug)]
 pub enum DashboardOutput {
     OpenSettings,
-    /// A backup was taken; the Backups page should refresh its list.
-    BackupsChanged,
+    /// A backup attempt finished. `Ok` carries a status line for the Backups
+    /// page (and means its list should refresh); `Err` carries the reason it
+    /// failed, so the page the user triggered it from can show it.
+    BackupDone(Result<String, String>),
 }
 
 #[relm4::component(pub)]
@@ -237,6 +242,7 @@ impl Component for DashboardPage {
             restart_count: 0,
             orphan: false,
             backup_in_flight: false,
+            backup_note: None,
             console,
             console_view: console_view.clone(),
         };
@@ -368,13 +374,14 @@ impl Component for DashboardPage {
             DashboardInput::BackupFinished { auto, result } => {
                 self.backup_in_flight = false;
                 let kind = if auto { "Auto-backup" } else { "Backup" };
+                let note = self.backup_note.take();
                 match &result {
                     Ok(name) => self.append(&format!("[manager] {kind}: created {name}\n")),
                     Err(e) => self.append(&format!("[manager] {kind} failed: {e}\n")),
                 }
                 if auto && result.is_ok() {
                     let keep = self.ctx.state.borrow().auto_backup_keep as usize;
-                    match backup::prune_auto(&self.ctx.backup_dir(), keep) {
+                    match backup::prune_auto(&self.ctx.resolve_backup_dir().path, keep) {
                         Ok(n) if n > 0 => {
                             self.append(&format!("[manager] Pruned {n} old auto-backup(s).\n"));
                         }
@@ -384,7 +391,19 @@ impl Component for DashboardPage {
                         _ => {}
                     }
                 }
-                let _ = sender.output(DashboardOutput::BackupsChanged);
+                // Report the outcome to the page the user triggered it from —
+                // the Backups page otherwise never learns why nothing appeared.
+                let outcome = match result {
+                    Ok(name) => Ok(match note {
+                        Some(n) => format!("Backed up {name} — {n}"),
+                        None => format!("Backed up {name}"),
+                    }),
+                    Err(e) => Err(match note {
+                        Some(n) => format!("{e} ({n})"),
+                        None => e,
+                    }),
+                };
+                let _ = sender.output(DashboardOutput::BackupDone(outcome));
             }
         }
         self.scroll_console();
@@ -564,13 +583,32 @@ impl DashboardPage {
         // auto timer both land here and each spawns a detached task. This is
         // the one place that starts a backup, so the guard belongs here.
         if self.backup_in_flight {
+            // The in-flight run will emit its own `BackupDone`, which clears the
+            // Backups page's "busy" state — so this request is simply folded
+            // into it rather than reported as a failure (the auto timer firing
+            // mid-backup is normal, not an error).
             self.append("[manager] A backup is already running — skipping this one.\n");
             return;
         }
         self.backup_in_flight = true;
 
         let level = backup::level_name(&self.ctx.paths);
-        let backup_dir = self.ctx.backup_dir();
+        // Use the folder that is actually writable now — the configured one may
+        // point at a drive that is not mounted, or a path from another machine.
+        let resolved = self.ctx.resolve_backup_dir();
+        let backup_dir = resolved.path;
+        if let Some(configured) = resolved.fell_back_from {
+            self.append(&format!(
+                "[manager] Backup folder {} is not writable — using {} instead.\n",
+                configured.display(),
+                backup_dir.display(),
+            ));
+            self.backup_note = Some(format!(
+                "configured folder {} was not writable, saved to {}",
+                configured.display(),
+                backup_dir.display(),
+            ));
+        }
         self.append(&format!(
             "[manager] {} backup starting…\n",
             if auto { "Automatic" } else { "Manual" }

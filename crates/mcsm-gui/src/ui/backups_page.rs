@@ -38,6 +38,9 @@ const KEEP_CHOICES: [(&str, u64); 6] = [
 pub struct BackupsPage {
     ctx: Context,
     entries: Vec<BackupEntry>,
+    /// The folder the list is showing — the resolved one, which is the
+    /// `<data>/backups` fallback when the configured folder is not writable.
+    backup_dir: std::path::PathBuf,
     busy: bool,
     status: String,
     /// Row index awaiting a confirming second click.
@@ -53,6 +56,8 @@ pub struct BackupsPage {
 pub enum BackupsInput {
     Reload,
     RequestBackup,
+    /// The Dashboard finished (or refused) a backup we asked for.
+    BackupDone(Result<String, String>),
     SetInterval(u32),
     SetKeep(u32),
     Restore(usize),
@@ -107,6 +112,7 @@ impl Component for BackupsPage {
     ) -> ComponentParts<Self> {
         let page = adw::PreferencesPage::new();
         let mut model = BackupsPage {
+            backup_dir: ctx.backup_dir(),
             ctx,
             entries: Vec::new(),
             busy: false,
@@ -131,8 +137,19 @@ impl Component for BackupsPage {
                 self.rebuild(&sender);
             }
             BackupsInput::RequestBackup => {
+                self.busy = true;
                 self.status = "Backing up… (progress in the Dashboard console)".to_string();
+                self.rebuild(&sender);
                 let _ = sender.output(BackupsOutput::BackupNowRequested);
+            }
+            BackupsInput::BackupDone(result) => {
+                self.busy = false;
+                self.reload();
+                match result {
+                    Ok(note) => self.status = note,
+                    Err(e) => self.status = format!("Backup failed: {e}"),
+                }
+                self.rebuild(&sender);
             }
             BackupsInput::SetInterval(idx) => {
                 let minutes = INTERVALS.get(idx as usize).map_or(0, |(_, m)| *m);
@@ -239,7 +256,11 @@ impl Drop for BackupsPage {
 
 impl BackupsPage {
     fn reload(&mut self) {
-        self.entries = backup::list(&self.ctx.backup_dir()).unwrap_or_default();
+        // Show the folder backups actually land in, which is the fallback when
+        // the configured one is unwritable — otherwise a successful backup
+        // would never show up in this list.
+        self.backup_dir = self.ctx.resolve_backup_dir().path;
+        self.entries = backup::list(&self.backup_dir).unwrap_or_default();
         let total: u64 = self.entries.iter().map(|e| e.size_bytes).sum();
         let autos = self.entries.iter().filter(|e| e.is_automatic()).count();
         self.status = format!(
@@ -322,7 +343,7 @@ impl BackupsPage {
     fn add_list_group(&mut self, sender: &ComponentSender<Self>) {
         let group = adw::PreferencesGroup::new();
         group.set_title("World backups");
-        let dir = self.ctx.backup_dir();
+        let dir = &self.backup_dir;
         group.set_description(Some(&if self.entries.is_empty() {
             format!("No backups yet. Saved to {}", dir.display())
         } else {

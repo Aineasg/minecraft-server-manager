@@ -63,7 +63,14 @@ fn main() -> anyhow::Result<()> {
 
     let state = AppState::load(&paths.state_file).context("loading state.toml")?;
     let context = Context::new(paths.clone(), state).context("initialising HTTP clients")?;
-    tracing::info!(backups = %context.backup_dir().display(), "backup folder");
+    match context.resolve_backup_dir() {
+        resolved if resolved.fell_back_from.is_some() => tracing::warn!(
+            configured = %resolved.fell_back_from.as_ref().unwrap().display(),
+            fallback = %resolved.path.display(),
+            "configured backup folder is not writable; backups will use the fallback until it is fixed in Settings",
+        ),
+        resolved => tracing::info!(backups = %resolved.path.display(), "backup folder"),
+    }
 
     let app = RelmApp::new(APP_ID);
     // Match the installed .desktop / hicolor icon so the window and taskbar

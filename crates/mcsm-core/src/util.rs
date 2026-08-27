@@ -30,6 +30,29 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::rename(&tmp, path).map_err(|e| Error::io(path, e))
 }
 
+/// Whether `dir` can be created (when missing) and written into.
+///
+/// Probes by creating and deleting a marker file rather than trusting the
+/// directory's permission bits: on Unix those miss a read-only mount, a path
+/// owned by someone else, an unmounted drive, or a `dir` that is actually a
+/// regular file. Used to decide whether a configured backup folder is still
+/// usable before every backup, so a path saved on another machine (or one
+/// whose drive is absent) falls back instead of failing silently.
+#[must_use]
+pub fn dir_is_writable(dir: &Path) -> bool {
+    if std::fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".mcsm-write-test");
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Read a file to a string, returning `Ok(None)` if it does not exist.
 pub fn read_to_string_opt(path: &Path) -> Result<Option<String>> {
     match std::fs::read_to_string(path) {
@@ -87,4 +110,34 @@ pub fn format_compact_utc(time: SystemTime) -> String {
     let year = if month <= 2 { year + 1 } else { year };
 
     format!("{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dir_is_writable_creates_missing_dirs_and_probes() {
+        let root = std::env::temp_dir().join(format!("mcsm-wr-{}", std::process::id()));
+        let nested = root.join("a").join("b");
+        assert!(!nested.exists());
+        assert!(dir_is_writable(&nested), "should create the tree and pass");
+        assert!(nested.is_dir());
+        // The probe file must not be left behind.
+        assert!(!nested.join(".mcsm-write-test").exists());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn dir_is_writable_is_false_when_the_path_is_a_file() {
+        let root = std::env::temp_dir().join(format!("mcsm-wr-file-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let as_file = root.join("not-a-dir");
+        std::fs::write(&as_file, b"x").unwrap();
+
+        assert!(!dir_is_writable(&as_file));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
