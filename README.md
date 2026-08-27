@@ -18,6 +18,10 @@ difficult configs. No more waiting 30 seconds for a modded world to load.
 
 **You've found it.**
 
+<div align="center">
+  <img src="docs/screenshots/dashboard.png" alt="The dashboard — start/stop/restart, a live memory meter for the whole process tree, and the server console with a command box" width="900">
+</div>
+
 ## ⚡ Why Rust?
 
 This tool is built in **Rust** for maximum performance and memory safety.
@@ -76,6 +80,23 @@ Just want to try it without installing anything? `cargo run --release -p mcsm-gu
 - **Settings** — install a Minecraft + Fabric version (no separate
   Fabric-installer step), set the memory budget and GC flags, point at your Java,
   accept the EULA, choose the backup folder.
+
+## 📸 A look around
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/mods.png" alt="Mods page"><br><sub><b>Mods</b> — search Modrinth, toggle without deleting, bulk update check</sub></td>
+<td width="50%"><img src="docs/screenshots/properties.png" alt="Properties page"><br><sub><b>Properties</b> — a typed <code>server.properties</code> form plus level.dat toggles</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/player-access.png" alt="Player access page"><br><sub><b>Player access</b> — ops, whitelist and bans, applied live</sub></td>
+<td><img src="docs/screenshots/backups.png" alt="Backups page"><br><sub><b>Backups</b> — scheduled snapshots with retention, one-click restore</sub></td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/settings.png" alt="Settings page"><br><sub><b>Settings</b> — version install, the memory ceiling, GC flags</sub></td>
+<td><img src="docs/screenshots/settings-about.png" alt="Settings, continued"><br><sub><b>Settings</b> — Java path, EULA, backup folder, licence</sub></td>
+</tr>
+</table>
 
 ## 📁 Where your stuff lives
 
