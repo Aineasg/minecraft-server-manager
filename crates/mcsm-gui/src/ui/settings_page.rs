@@ -2,6 +2,7 @@
 //! budget and JVM, point at a `java` binary, and accept the EULA.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use adw::prelude::*;
 use mcsm_core::memory::MemoryBudget;
@@ -31,6 +32,10 @@ pub struct SettingsPage {
     /// changes, never rebuilt on every view update.
     ceiling_adj: gtk::Adjustment,
     heap_adj: gtk::Adjustment,
+    /// Bumped on every keystroke in the Java-path field; the debounced save
+    /// only writes when the generation it captured is still current, so typing
+    /// a path does not fsync `state.toml` on every character.
+    save_generation: u64,
 }
 
 #[derive(Debug)]
@@ -49,6 +54,9 @@ pub enum SettingsInput {
     InstallProgress(String),
     InstallFinished(Result<(), String>),
     SaveJvm,
+    /// Debounced write of the Java-path edit; carries the generation it was
+    /// scheduled at so stale timers become no-ops.
+    FlushState(u64),
     BackupDirEdited(String),
     BrowseBackupDir,
 }
@@ -306,6 +314,7 @@ impl Component for SettingsPage {
             status_line: "Loading available versions…".to_string(),
             ceiling_adj,
             heap_adj,
+            save_generation: 0,
             ctx: ctx.clone(),
         };
         drop(state);
@@ -366,6 +375,9 @@ impl Component for SettingsPage {
             }
             SettingsInput::TotalCeilingChanged(gib_value) => {
                 let mib = (gib_value * 1024.0).round() as u64;
+                if self.ctx.state.borrow().memory.total_mib == mib {
+                    return; // notify fired with an unchanged value
+                }
                 {
                     let mut st = self.ctx.state.borrow_mut();
                     st.memory.total_mib = mib;
@@ -375,6 +387,10 @@ impl Component for SettingsPage {
                     }
                 }
                 self.sync_heap_adjustment();
+                // Written straight away, not debounced: a spinner steps once per
+                // click (1 GiB / 256 MiB), and closing the window right after an
+                // edit must not lose it — the whole point of this fix.
+                let _ = self.ctx.save_state();
             }
             SettingsInput::HeapChanged(mib) => {
                 let total = self.ctx.state.borrow().memory.total_mib;
@@ -384,13 +400,27 @@ impl Component for SettingsPage {
                 }
                 self.ctx.state.borrow_mut().memory.xmx_mib = Some(clamped);
                 self.sync_heap_adjustment();
+                let _ = self.ctx.save_state();
             }
             SettingsInput::JavaPathEdited(text) => {
                 let trimmed = text.trim();
-                self.ctx.state.borrow_mut().java_path =
-                    (!trimmed.is_empty()).then(|| trimmed.into());
+                let new = (!trimmed.is_empty()).then(|| PathBuf::from(trimmed));
+                if self.ctx.state.borrow().java_path == new {
+                    return;
+                }
+                self.ctx.state.borrow_mut().java_path = new;
+                self.schedule_save(&sender);
+            }
+            SettingsInput::FlushState(generation) => {
+                // A newer edit came in while this timer was pending; let its
+                // own flush do the write.
+                if generation == self.save_generation {
+                    let _ = self.ctx.save_state();
+                }
             }
             SettingsInput::SaveJvm => {
+                // Cancel any pending debounced write — this is the immediate one.
+                self.save_generation = self.save_generation.wrapping_add(1);
                 let _ = self.ctx.save_state();
                 self.status_line = "Java & memory settings saved.".to_string();
                 let _ = sender.output(SettingsOutput::Changed);
@@ -525,6 +555,18 @@ impl Component for SettingsPage {
 impl SettingsPage {
     fn budget(&self) -> MemoryBudget {
         self.ctx.state.borrow().budget()
+    }
+
+    /// Persist settings after a short quiet period. Successive keystrokes in the
+    /// Java-path field coalesce into one write: each bumps the generation, and
+    /// only the last timer to fire still matches.
+    fn schedule_save(&mut self, sender: &ComponentSender<Self>) {
+        self.save_generation = self.save_generation.wrapping_add(1);
+        let generation = self.save_generation;
+        sender.oneshot_command(async move {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            SettingsInput::FlushState(generation)
+        });
     }
 
     /// Move the heap spinner's bounds and value to match the current budget,
