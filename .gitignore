@@ -4,11 +4,11 @@
 # Runtime data written by the app when run from a checkout: server jars, the
 # world, mods, config, logs, state.toml. Ignored by git, but NOT disposable —
 # this is a live Minecraft world. Never `rm -rf data` or `git clean -fdx` here;
-# use MCSM_ROOT=$(mktemp -d) for a throwaway run. See CLAUDE.md.
+# use MCSM_ROOT=$(mktemp -d) for a throwaway run. See CONTRIBUTING.md.
 /data
 
 # Local editor / tooling state
-/.claude/settings.local.json
+/.directory
 /.idea
 /.vscode
 *.swp

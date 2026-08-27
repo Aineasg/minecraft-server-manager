@@ -56,10 +56,10 @@ JVM into `<data>/server/logs/`, that being its working directory. The directory
 is reserved so the layout does not shift if app file-logging is added.
 
 `./data/` is git-ignored but it is **live user data** — a Minecraft world plus
-the server jars, mods and `state.toml`. Nothing in the tooling, and no
-contributor or assistant, should ever `rm -rf data`, `git clean -fdx`, or bulk-
+the server jars, mods and `state.toml`. Nothing in the tooling and no one
+working in this repo should ever `rm -rf data`, `git clean -fdx`, or bulk-
 overwrite it. A clean-slate run goes to a throwaway root
-(`MCSM_ROOT="$(mktemp -d)"`), never by clearing `data/`. See `CLAUDE.md`.
+(`MCSM_ROOT="$(mktemp -d)"`), never by clearing `data/`. See `CONTRIBUTING.md`.
 
 **Backups are the one thing that leaves the folder.** `state.backup_dir` (an
 `Option`, pinned to the resolved default on first run so it is never forgotten)
