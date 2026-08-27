@@ -203,9 +203,16 @@ impl ServerHandle {
 
     /// Ask the server to shut down cleanly (`stop`), escalating to
     /// `systemctl --user stop` / SIGKILL if it does not exit in time.
+    ///
+    /// Uses `notify_one` rather than `notify_waiters`: the supervisor task only
+    /// registers its `Notified` future the first time it is polled, so a stop
+    /// arriving immediately after [`ServerHandle::start`] could otherwise be
+    /// dropped on the floor — and with it the escalation that force-stops a JVM
+    /// which ignores `stop`. `notify_one` stores a permit when nobody is waiting
+    /// yet, and a second call is harmless because the supervisor awaits it once.
     pub async fn stop(&self) {
         let _ = self.send_command("stop").await;
-        self.stop_requested.notify_waiters();
+        self.stop_requested.notify_one();
     }
 
     #[must_use]
@@ -328,11 +335,25 @@ async fn sample_memory(budget: MemoryBudget, events: mpsc::Sender<ServerEvent>) 
     };
 
     let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    let mut misses: u32 = 0;
     loop {
         ticker.tick().await;
         let Some(current) = read_cgroup_u64(&dir.join("memory.current")).await else {
-            break; // scope gone
+            // A single failed read can be a transient cgroup race while
+            // systemd moves the unit; give it a few ticks before declaring
+            // the scope gone, or the UI meter freezes on a hiccup.
+            misses += 1;
+            if misses >= 5 {
+                let _ = events
+                    .send(ServerEvent::Warning(
+                        "lost the server cgroup; live memory readout stopped".into(),
+                    ))
+                    .await;
+                break;
+            }
+            continue;
         };
+        misses = 0;
         let peak = read_cgroup_u64(&dir.join("memory.peak")).await;
         let _ = events
             .send(ServerEvent::Memory {

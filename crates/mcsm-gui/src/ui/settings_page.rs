@@ -8,6 +8,7 @@ use mcsm_core::memory::MemoryBudget;
 use mcsm_core::net::fabric::{self, GameVersion};
 use mcsm_core::net::Http;
 use mcsm_core::ops::install::{self, InstallPlan, InstallProgress};
+use mcsm_core::ops::server::scope_active;
 use mcsm_core::state::GcPreset;
 use relm4::gtk::gio;
 use relm4::prelude::*;
@@ -444,6 +445,18 @@ impl Component for SettingsPage {
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
+                            // `std::fs::copy` truncates the destination in
+                            // place: overwriting server.jar / the launcher jar
+                            // while a JVM is lazily class-loading from them
+                            // corrupts the running server. Reinstall only
+                            // when it is stopped.
+                            if scope_active().await {
+                                let _ = out.send(SettingsInput::InstallFinished(Err(
+                                    "Stop the server before installing or reinstalling."
+                                        .to_string(),
+                                )));
+                                return;
+                            }
                             let progress = {
                                 let out = out.clone();
                                 move |p: InstallProgress| {

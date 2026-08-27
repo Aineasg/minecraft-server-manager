@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use adw::prelude::*;
 use gtk::glib::SignalHandlerId;
+use mcsm_core::ops::backup;
 use mcsm_core::util::write_atomic;
 use relm4::prelude::*;
 
@@ -173,8 +174,38 @@ impl Component for FilesPage {
 
 impl FilesPage {
     fn rescan(&mut self) {
-        self.files = walk(&self.ctx.paths.data, 5);
+        self.files = walk(&self.ctx.paths.data, 5, &self.bulk_world_dirs());
         self.status = format!("{} file(s) under data/", self.files.len());
+    }
+
+    /// Directories holding generated world data — thousands of region/entity
+    /// files on any explored world, none of them hand-editable. Listing them
+    /// would build one `gtk::Label` per chunk file and hang the page, so they
+    /// are pruned. A world's `serverconfig/` (per-world mod settings) is
+    /// deliberately *not* pruned: that is exactly what this page is for.
+    fn bulk_world_dirs(&self) -> Vec<PathBuf> {
+        const GENERATED: [&str; 9] = [
+            "region",
+            "entities",
+            "poi",
+            "playerdata",
+            "stats",
+            "advancements",
+            "data",
+            "DIM-1",
+            "DIM1",
+        ];
+        let level = backup::level_name(&self.ctx.paths);
+        let mut out = Vec::new();
+        for world in [
+            level.clone(),
+            format!("{level}_nether"),
+            format!("{level}_the_end"),
+        ] {
+            let dir = self.ctx.paths.server.join(world);
+            out.extend(GENERATED.iter().map(|sub| dir.join(sub)));
+        }
+        out
     }
 
     fn populate_list(&self) {
@@ -201,17 +232,24 @@ impl FilesPage {
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         // Block the dirty-tracking handler: this content is what's on disk.
         self.buffer.block_signal(&self.changed_handler);
+
+        // Check the size *before* reading. A region file or a world-sized blob
+        // would otherwise be pulled into memory in full only to be rejected —
+        // which is exactly the allocation the whole app is trying to stay under.
+        if size > MAX_EDIT_BYTES {
+            self.buffer.set_text("(file too large to open here)");
+            self.editable = false;
+            self.status = format!("{} — too large to edit safely", human_bytes(size));
+            self.buffer.unblock_signal(&self.changed_handler);
+            return;
+        }
+
         match std::fs::read(path) {
             Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(text) if size <= MAX_EDIT_BYTES => {
+                Ok(text) => {
                     self.buffer.set_text(&text);
                     self.editable = true;
                     self.status = format!("{} — editable", human_bytes(size));
-                }
-                Ok(text) => {
-                    self.buffer.set_text(&text);
-                    self.editable = false;
-                    self.status = format!("{} — too large to edit safely", human_bytes(size));
                 }
                 Err(_) => {
                     self.buffer.set_text("(binary file — not shown)");
@@ -220,6 +258,7 @@ impl FilesPage {
                 }
             },
             Err(e) => {
+                self.buffer.set_text("");
                 self.editable = false;
                 self.status = format!("Could not read file: {e}");
             }
@@ -228,9 +267,10 @@ impl FilesPage {
     }
 }
 
-/// Depth-limited recursive file list, skipping the pre-restore stashes and
-/// obvious noise.
-fn walk(root: &std::path::Path, max_depth: usize) -> Vec<PathBuf> {
+/// Depth-limited recursive file list, skipping the pre-restore stashes, obvious
+/// noise, and any directory in `prune` (generated world data — see
+/// [`FilesPage::bulk_world_dirs`]).
+fn walk(root: &std::path::Path, max_depth: usize, prune: &[PathBuf]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, depth)) = stack.pop() {
@@ -244,7 +284,11 @@ fn walk(root: &std::path::Path, max_depth: usize) -> Vec<PathBuf> {
                 continue;
             }
             match entry.file_type() {
-                Ok(t) if t.is_dir() && depth < max_depth => stack.push((path, depth + 1)),
+                Ok(t) if t.is_dir() && depth < max_depth => {
+                    if !prune.contains(&path) {
+                        stack.push((path, depth + 1));
+                    }
+                }
                 Ok(t) if t.is_file() => out.push(path),
                 _ => {}
             }
@@ -252,4 +296,50 @@ fn walk(root: &std::path::Path, max_depth: usize) -> Vec<PathBuf> {
     }
     out.sort();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn walk_skips_pruned_directories_but_keeps_their_siblings() {
+        let root = std::env::temp_dir().join(format!(
+            "mcsm-files-walk-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let world = root.join("server").join("world");
+        std::fs::create_dir_all(world.join("region")).unwrap();
+        std::fs::create_dir_all(world.join("serverconfig")).unwrap();
+        std::fs::write(world.join("region").join("r.0.0.mca"), b"chunks").unwrap();
+        std::fs::write(world.join("serverconfig").join("mod.toml"), b"a=1").unwrap();
+        std::fs::write(world.join("level.dat"), b"nbt").unwrap();
+
+        let found = walk(&root, 5, &[world.join("region")]);
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+
+        assert!(
+            !names.iter().any(|n| n.contains("r.0.0.mca")),
+            "region files must be pruned: {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n.ends_with("serverconfig/mod.toml")),
+            "per-world mod config must stay listed: {names:?}"
+        );
+        assert!(names.iter().any(|n| n.ends_with("level.dat")));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

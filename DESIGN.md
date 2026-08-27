@@ -23,8 +23,8 @@ alongside the code, not instead of it.
 
 | crate | contains | tested |
 |---|---|---|
-| `mcsm-core` | paths, `state.toml`, `server.properties` round-trip, memory-budget math, access-file models, Fabric/Mojang/Modrinth HTTP clients, jar hashing + `fabric.mod.json` reading, install/mods/backup/server-process operations | 53 unit tests, no network |
-| `mcsm-gui` | `main.rs`, a `Context` shared by every page, and one Relm4 component per page | compiles; logic lives in core |
+| `mcsm-core` | paths, `state.toml`, `server.properties` round-trip, memory-budget math, access-file models, Fabric/Mojang/Modrinth HTTP clients, jar hashing + `fabric.mod.json` reading, install/mods/backup/server-process operations | unit-tested, no network |
+| `mcsm-gui` | `main.rs`, a `Context` shared by every page, and one Relm4 component per page | logic lives in core; only pure helpers are tested here |
 
 `mcsm-core` has no GTK dependency, so its tests run in milliseconds and the
 logic can be reasoned about without a display.
@@ -49,6 +49,11 @@ In portable mode runtime state is nested in `<root>/data/` so it stays out of
 the source tree; in every other case it sits directly in the resolved directory
 (`paths.data == paths.root`). `Paths::with_root` builds the first layout,
 `Paths::with_data_dir` the second.
+
+`<data>/logs/` is created but **currently unused**: the app itself logs to
+stderr (`MCSM_LOG=debug`), and the server's own rolling logs are written by the
+JVM into `<data>/server/logs/`, that being its working directory. The directory
+is reserved so the layout does not shift if app file-logging is added.
 
 `./data/` is git-ignored but it is **live user data** — a Minecraft world plus
 the server jars, mods and `state.toml`. Nothing in the tooling, and no
@@ -180,6 +185,17 @@ Mojang piston manifest and is SHA-1 verified. Both are cached by name under
 `tar --zstd` of the `<level-name>` directory (plus `_nether` / `_the_end`
 siblings if a setup keeps them separate). Restore moves the live world aside to
 `<name>.pre-restore` first, and refuses to run while the server scope is active.
+
+Two things restore/create refuse rather than do:
+
+- **Level-name mismatch.** `restore` lists the archive (`tar -tf`) and checks its
+  top-level directory against the current `level-name` before moving anything.
+  Unpacking a `myworld/` archive while `level-name` is `world` would stash the
+  live world, write a directory the server never reads, and let it generate a
+  fresh empty world — a silent loss that looks like success.
+- **Name collisions.** Archive names are second-resolution, so a manual backup
+  and the auto timer firing in the same second would land on one filename;
+  `create` errors instead of overwriting an archive.
 
 Creating a backup (manual button or the auto timer) is routed through the
 Dashboard's live server handle: if the server is running it sends `save-all

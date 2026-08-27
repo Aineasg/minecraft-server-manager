@@ -1,8 +1,10 @@
 //! Where everything lives on disk.
 //!
 //! The manager is deliberately *self-contained*: a single directory holds every
-//! byte the app writes at runtime — server jars, the world, mods, backups,
-//! logs, app state. Deleting that one directory is a complete uninstall. When
+//! byte the app writes at runtime — server jars, the world, mods, logs, app
+//! state. (Backups are the deliberate exception; see
+//! [`Paths::default_backup_dir`].) Deleting that one directory is a complete
+//! uninstall. When
 //! run from a repo checkout it is `<repo>/data/` (keeping runtime state out of
 //! the source tree); installed, it is the manager's own data directory.
 //!
@@ -38,7 +40,13 @@ pub struct Paths {
     pub cache: PathBuf,
     /// `<data>/backups` — world archives.
     pub backups: PathBuf,
-    /// `<data>/logs` — rotated server logs plus the app's own log.
+    /// `<data>/logs` — reserved for the app's own log file.
+    ///
+    /// Nothing writes here yet: the app logs to stderr (`MCSM_LOG=debug`), and
+    /// the *server's* rolling logs are written by the JVM into
+    /// `<data>/server/logs/`, since that is its working directory. The
+    /// directory is still created so the layout is stable if file logging is
+    /// added.
     pub logs: PathBuf,
 }
 

@@ -148,6 +148,11 @@ impl PropertiesPage {
         }
         self.world_rows.clear();
         self.dirty = false;
+        // Drop any previously parsed file up front. Otherwise a failed re-read
+        // below leaves the old `Properties` in place, and the form's rows —
+        // which have already been torn down — no longer describe it; a later
+        // Save would write stale content back over server.properties.
+        self.props = None;
 
         // World settings from level.dat (hardcore etc.), if the world exists.
         self.world_level = backup::level_name(&self.ctx.paths);

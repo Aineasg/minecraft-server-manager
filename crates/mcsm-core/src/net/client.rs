@@ -29,21 +29,46 @@ const RETRY_DELAYS: [Duration; 3] = [
 /// Cheap to clone; wraps a `reqwest::Client` which is itself a connection-pool handle.
 #[derive(Debug, Clone)]
 pub struct Http {
+    /// JSON APIs: short and predictable, one hard deadline per request.
     client: reqwest::Client,
+    /// File downloads: no total deadline — a big mod on a slow link must not
+    /// die at 60 s — but each individual socket read is still bounded so a
+    /// stalled CDN cannot hang the task forever.
+    download_client: reqwest::Client,
+}
+
+fn json_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|source| Error::Http {
+            url: "<client builder>".into(),
+            source,
+        })
+}
+
+fn download_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(Duration::from_secs(15))
+        // Bounds each `read()` from the peer, not the whole transfer: the total
+        // may legitimately run for many minutes on a large jar.
+        .read_timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|source| Error::Http {
+            url: "<client builder>".into(),
+            source,
+        })
 }
 
 impl Http {
     pub fn new() -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(60))
-            .build()
-            .map_err(|source| Error::Http {
-                url: "<client builder>".into(),
-                source,
-            })?;
-        Ok(Self { client })
+        Ok(Self {
+            client: json_client()?,
+            download_client: download_client()?,
+        })
     }
 
     /// `GET url` and deserialize the JSON body, retrying transient failures.
@@ -96,8 +121,9 @@ impl Http {
                 .map_err(|e| Error::io(parent, e))?;
         }
 
+        // The download client (no total timeout) — see `Http`'s field docs.
         let resp = with_retries(url, || async {
-            self.send(service, self.client.get(url)).await
+            self.send(service, self.download_client.get(url)).await
         })
         .await?;
 
@@ -147,6 +173,21 @@ impl Http {
             url: resp.url().to_string(),
         })
     }
+}
+
+/// Percent-encode a query-parameter or path-segment value. Shared by every
+/// client that interpolates remote/user text into a URL.
+pub(crate) fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 async fn body_text(service: &'static str, url: &str, resp: reqwest::Response) -> Result<String> {

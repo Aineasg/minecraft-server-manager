@@ -163,6 +163,22 @@ pub fn parse_ip(text: &str) -> Result<IpAddr> {
         .map_err(|_| Error::msg(format!("`{text}` is not a valid IP address")))
 }
 
+/// Whether `name` is a legal Minecraft player name (and therefore safe to
+/// interpolate into a *console command* or a profile-lookup URL).
+///
+/// The server console is line-oriented: [`crate::ops::server::ServerHandle::
+/// send_command`] writes one `\n`-terminated line, so any name smuggled in
+/// with an embedded `\n` (possible via hand-edited ops/whitelist JSON) would
+/// inject a second console command. Restricting to the vanilla grammar
+/// (`[A-Za-z0-9_]{1,16}`) makes that impossible while accepting every name a
+/// real account can have.
+#[must_use]
+pub fn valid_player_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 16
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +221,20 @@ mod tests {
         let list: Vec<BannedPlayer> = serde_json::from_str(json).unwrap();
         assert_eq!(list[0].expires, "forever");
         assert_eq!(list[0].reason, "Banned by an operator.");
+    }
+
+    #[test]
+    fn player_names_follow_the_vanilla_grammar() {
+        assert!(valid_player_name("Notch"));
+        assert!(valid_player_name("jeb_"));
+        assert!(valid_player_name("1234"));
+
+        // A hand-edited JSON file must not be able to smuggle a second console
+        // command through an embedded newline.
+        assert!(!valid_player_name("foo\nstop"));
+        assert!(!valid_player_name("foo op bar"));
+        assert!(!valid_player_name(""));
+        assert!(!valid_player_name(&"x".repeat(17)));
+        assert!(!valid_player_name("héllo"));
     }
 }

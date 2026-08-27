@@ -74,6 +74,24 @@ cargo run --release -p mcsm-gui
 plus the `zstd` binary, and `systemd --user` for the hard memory cap (without it
 the server still runs, but the ceiling becomes advisory).
 
+### Upgrading
+
+Pull (or re-clone) the new version and run `./install.sh` again. It rebuilds and
+replaces the binary in `~/.local/bin`; the app menu entry is pinned to that path
+so it always launches the version you just installed. Your data directory
+(`~/.local/share/MinecraftServerManager/` — world, jars, mods, `state.toml`) is
+never read or touched by the installer. Confirm the build with
+`~/.local/bin/mcsm --version` (the absolute path — a plain `mcsm` may still hit
+an older copy earlier on your `PATH`).
+
+If you installed with `makepkg -si` instead, upgrade with `makepkg -si` — don't
+mix the two, or an old `/usr/bin/mcsm` can shadow the new one (the script warns
+when it detects this).
+
+Downgrading is best-effort: an older build loads a `state.toml` written by a
+newer one, but settings the newer version added are dropped the next time
+settings are saved. The world is unaffected.
+
 ## Where things live
 
 The app keeps **everything in one folder** (call it `<root>`):
@@ -86,8 +104,9 @@ The app keeps **everything in one folder** (call it `<root>`):
 <root>/
 ├── state.toml            settings (human-editable)
 ├── server/               jars, world, mods/, config/, ops.json, whitelist.json, …
+│   └── logs/             the server's own rolling logs, written by the JVM
 ├── cache/                downloaded jars, reused across reinstalls
-└── logs/
+└── logs/                 reserved for an app log; nothing writes here yet
 ```
 
 **Backups** are the one exception: they default to
@@ -128,7 +147,7 @@ auto-restart never runs after an OOM kill.
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace          # ~60 unit tests, no network
+cargo test --workspace          # unit tests, no network
 ```
 
 `crates/mcsm-core` is all logic and has no GTK dependency; `crates/mcsm-gui` is a

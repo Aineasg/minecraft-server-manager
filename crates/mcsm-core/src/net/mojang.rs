@@ -5,7 +5,7 @@
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
-use crate::net::client::Http;
+use crate::net::client::{self, Http};
 
 const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 const PROFILE_URL: &str = "https://api.mojang.com/users/profiles/minecraft";
@@ -89,7 +89,9 @@ struct Profile {
 /// Look up a player's UUID by username on an online-mode account server.
 /// Returns `Ok(None)` when the name has no paid account.
 pub async fn lookup_uuid(http: &Http, name: &str) -> Result<Option<String>> {
-    let url = format!("{PROFILE_URL}/{name}");
+    // The name is user-typed and ends up in a URL path segment; never let a
+    // `/`, `?` or space change which endpoint is actually hit.
+    let url = format!("{PROFILE_URL}/{}", client::urlencode(name.trim()));
     match http.get_json::<Profile>(SERVICE, &url).await {
         Ok(profile) => Ok(Some(dash_uuid(&profile.id))),
         Err(Error::HttpStatus { status, .. }) if status == 404 || status == 204 => Ok(None),

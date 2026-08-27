@@ -114,14 +114,23 @@ pub async fn install_version(
         .primary_file()
         .ok_or_else(|| Error::msg(format!("Modrinth version {} has no file", version.id)))?;
 
+    // `filename` and `hashes.sha512` come straight off the network. Both are
+    // joined onto our directories, so neither is trusted as-is: a filename
+    // carrying a separator (or `..`) would escape `cache/` and `mods/`, and a
+    // short hash would panic the prefix slice below.
+    let filename = safe_file_name(&file.filename)?;
+    let hash_prefix = file.hashes.sha512.get(..16).ok_or_else(|| {
+        Error::msg(format!(
+            "Modrinth returned a malformed SHA-512 for {filename}"
+        ))
+    })?;
+
     // Already installed (same content)?
     if scan(paths)?.iter().any(|m| m.sha512 == file.hashes.sha512) {
         return Ok(None);
     }
 
-    let cache_path = paths
-        .cache
-        .join(format!("{}-{}", &file.hashes.sha512[..16], file.filename));
+    let cache_path = paths.cache.join(format!("{hash_prefix}-{filename}"));
     if !cache_path.is_file() {
         http.download_to_file("Modrinth CDN", &file.url, &cache_path, |_, _| {})
             .await?;
@@ -129,15 +138,32 @@ pub async fn install_version(
     if sha512_hex(&cache_path)? != file.hashes.sha512 {
         let _ = std::fs::remove_file(&cache_path);
         return Err(Error::msg(format!(
-            "{} failed SHA-512 verification",
-            file.filename
+            "{filename} failed SHA-512 verification"
         )));
     }
 
-    let dest = paths.mods.join(&file.filename);
+    let dest = paths.mods.join(filename);
     std::fs::create_dir_all(&paths.mods).map_err(|e| Error::io(&paths.mods, e))?;
     std::fs::copy(&cache_path, &dest).map_err(|e| Error::io(&dest, e))?;
     Ok(Some(dest))
+}
+
+/// Reduce a filename from a remote API to a bare file-name component, refusing
+/// anything that would resolve outside the directory it is joined onto.
+fn safe_file_name(raw: &str) -> Result<&str> {
+    let rejected = || {
+        Error::msg(format!(
+            "Modrinth returned an unusable file name `{raw}`; refusing to write it"
+        ))
+    };
+    if raw.contains('/') || raw.contains('\\') || raw.contains('\0') {
+        return Err(rejected());
+    }
+    let name = raw.trim();
+    if name.is_empty() || name == "." || name == ".." {
+        return Err(rejected());
+    }
+    Ok(name)
 }
 
 /// Replace an installed mod with a newer Modrinth [`Version`].
@@ -147,12 +173,24 @@ pub async fn install_version(
 /// [`install_version`] has already overwritten it in place and deleting `old`
 /// would take the update with it. A no-op (`None` from `install_version`, i.e.
 /// the new content was already present) still removes the stale jar.
+///
+/// The one exception is `old` *being* the requested version already: then the
+/// "already present" no-op refers to `old` itself and removing it would delete
+/// the mod outright. Today's callers cannot reach that — [`check_updates`] drops
+/// any version whose file is already installed — but this is a public API, so
+/// the identity case is checked here rather than relied on upstream.
 pub async fn update(
     http: &Http,
     paths: &Paths,
     old: &InstalledMod,
     new_version: &Version,
 ) -> Result<()> {
+    if new_version
+        .primary_file()
+        .is_some_and(|f| f.hashes.sha512 == old.sha512)
+    {
+        return Ok(()); // already this version: nothing to install, nothing to delete
+    }
     let installed = install_version(http, paths, new_version).await?;
     if should_remove_old(installed.as_deref(), &old.path) {
         remove(old)?;
@@ -308,6 +346,28 @@ mod tests {
         // New version overwrote the same file in place: keep it (it *is* the update).
         assert!(!should_remove_old(Some(same), same));
         // Nothing was written (content already present): still drop the stale jar.
+        // `update` only reaches this with a *different* jar holding that content;
+        // the case where `old` itself is the requested version short-circuits
+        // before `install_version` (see `update`).
         assert!(should_remove_old(None, same));
+    }
+
+    #[test]
+    fn remote_file_names_cannot_escape_the_mods_directory() {
+        assert_eq!(safe_file_name("sodium-0.6.jar").unwrap(), "sodium-0.6.jar");
+        for hostile in [
+            "../../../.bashrc",
+            "sub/dir.jar",
+            "..\\windows.jar",
+            "..",
+            ".",
+            "",
+            "   ",
+        ] {
+            assert!(
+                safe_file_name(hostile).is_err(),
+                "`{hostile}` should be rejected"
+            );
+        }
     }
 }

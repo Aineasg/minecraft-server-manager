@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::net::client::Http;
+use crate::net::client::{self, Http};
 
 const BASE: &str = "https://api.modrinth.com/v2";
 const SERVICE: &str = "Modrinth";
@@ -289,17 +289,22 @@ impl Modrinth {
     pub async fn search(&self, params: &SearchParams) -> Result<SearchResults> {
         let url = format!(
             "{BASE}/search?query={}&limit={}&offset={}&index=relevance&facets={}",
-            urlencode(&params.query),
+            client::urlencode(&params.query),
             params.limit,
             params.offset,
-            urlencode(&params.facets_json()),
+            client::urlencode(&params.facets_json()),
         );
         self.http.get_json(SERVICE, &url).await
     }
 
     pub async fn get_version(&self, version_id: &str) -> Result<Version> {
+        // IDs come from API responses; encoding keeps them from changing the
+        // shape of the path even if a peer ever returns something odd.
         self.http
-            .get_json(SERVICE, &format!("{BASE}/version/{version_id}"))
+            .get_json(
+                SERVICE,
+                &format!("{BASE}/version/{}", client::urlencode(version_id)),
+            )
             .await
     }
 
@@ -310,7 +315,8 @@ impl Modrinth {
         loader: &str,
     ) -> Result<Vec<Version>> {
         let url = format!(
-            "{BASE}/project/{project}/version?loaders=[\"{loader}\"]&game_versions=[\"{mc}\"]"
+            "{BASE}/project/{}/version?loaders=[\"{loader}\"]&game_versions=[\"{mc}\"]",
+            client::urlencode(project)
         );
         self.http.get_json(SERVICE, &urlencode_query(&url)).await
     }
@@ -386,20 +392,6 @@ struct UpdateLookup<'a> {
     game_versions: [&'a str; 1],
 }
 
-/// Percent-encode a query-parameter value.
-fn urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
 /// Encode only the part of `url` after the first `?`, leaving the path intact.
 fn urlencode_query(url: &str) -> String {
     match url.split_once('?') {
@@ -408,7 +400,7 @@ fn urlencode_query(url: &str) -> String {
             let encoded: Vec<String> = query
                 .split('&')
                 .map(|pair| match pair.split_once('=') {
-                    Some((k, v)) => format!("{k}={}", urlencode(v)),
+                    Some((k, v)) => format!("{k}={}", client::urlencode(v)),
                     None => pair.to_string(),
                 })
                 .collect();

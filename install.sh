@@ -138,7 +138,23 @@ BUILT="$REPO_DIR/target/release/$BIN"
 # --- install ------------------------------------------------------------------
 say "Installing to ~/.local"
 install -Dm755 "$BUILT" "$BIN_DIR/$BIN"
-install -Dm644 "$REPO_DIR/packaging/$APP_ID.desktop" "$APP_DIR/$APP_ID.desktop"
+
+# The packaged .desktop ships a bare `Exec=mcsm`, which is right for a distro
+# package (/usr/bin is always on PATH) but not here: the graphical session
+# launches this from its own PATH, which usually lacks ~/.local/bin, so a menu
+# click would fail — or worse, start a stale /usr/bin/mcsm from an old
+# distro-package install that this user-level entry now shadows. Pin Exec to the
+# binary we just wrote so the launcher always runs *this* version.
+mkdir -p "$APP_DIR"
+sed "s|^Exec=mcsm\$|Exec=$BIN_DIR/$BIN|" \
+	"$REPO_DIR/packaging/$APP_ID.desktop" >"$APP_DIR/$APP_ID.desktop"
+chmod 644 "$APP_DIR/$APP_ID.desktop"
+# The rewrite is anchored to the literal `Exec=mcsm`. If that line ever changes
+# shape the substitution silently does nothing and the menu entry launches
+# whatever `mcsm` is on the session PATH again — fail loudly instead.
+grep -q "^Exec=$BIN_DIR/$BIN\$" "$APP_DIR/$APP_ID.desktop" ||
+	die "could not pin Exec= in $APP_ID.desktop (packaged file changed?)"
+
 install -Dm644 "$REPO_DIR/packaging/$APP_ID.svg" "$ICON_DIR/scalable/apps/$APP_ID.svg"
 for s in 16 24 32 48 64 128 256 512; do
 	install -Dm644 "$REPO_DIR/packaging/icons/${s}.png" "$ICON_DIR/${s}x${s}/apps/$APP_ID.png"
@@ -148,6 +164,17 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -qtf "$ICON_DIR" 2>/dev/null || true
 
 say "Installed. Launch it from your app menu, or run: $BIN"
+
+# If an older install (e.g. `makepkg -si` → /usr/bin/mcsm) is still on PATH and
+# comes first, typing `mcsm` in a terminal would run the stale binary even
+# though this upgrade "succeeded". The menu entry is safe (absolute Exec=), but
+# say something about the terminal case.
+found=$(command -v "$BIN" 2>/dev/null || true)
+if [ -n "$found" ] && [ "$found" != "$BIN_DIR/$BIN" ]; then
+	warn "'$BIN' on your PATH is $found, not the copy just installed at $BIN_DIR/$BIN."
+	warn "Remove the old one (e.g. 'sudo pacman -R minecraft-server-manager') or put $BIN_DIR first on PATH."
+fi
+
 case ":$PATH:" in
 *":$HOME/.local/bin:"*) ;;
 *) warn "$HOME/.local/bin is not on your PATH — add it to run 'mcsm' from a terminal." ;;

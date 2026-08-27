@@ -19,9 +19,11 @@ use crate::ui::widgets::gib;
 const MAX_RESTARTS: u32 = 3;
 
 /// Cap on console lines held in the view. When it is exceeded the oldest are
-/// dropped back to [`CONSOLE_TRIM_TO`]. The complete log is always on disk in
-/// `data/logs`; this only bounds the scrollback the widget has to render so a
-/// long-running or chatty server can't grow it without limit.
+/// dropped back to [`CONSOLE_TRIM_TO`]. This only bounds the scrollback the
+/// widget has to render, so a long-running or chatty server can't grow it
+/// without limit; the server's own rolling log is on disk in
+/// `data/server/logs/` (written by the JVM, whose working directory is
+/// `data/server`), so trimming the view loses nothing permanently.
 const MAX_CONSOLE_LINES: i32 = 5_000;
 const CONSOLE_TRIM_TO: i32 = 4_000;
 
@@ -57,6 +59,8 @@ pub struct DashboardPage {
     /// A server scope is active that this app did not start (previous session,
     /// or launched by hand). We can stop it but cannot stream its console.
     orphan: bool,
+    /// A backup task is running; a second one must not start (see [`Self::run_backup`]).
+    backup_in_flight: bool,
     console: gtk::TextBuffer,
     console_view: gtk::TextView,
 }
@@ -174,7 +178,7 @@ impl Component for DashboardPage {
                 #[wrap(Some)]
                 set_header_suffix = &gtk::Button {
                     set_label: "Clear",
-                    set_tooltip_text: Some("Clear the console view (the full log is still saved to data/logs)"),
+                    set_tooltip_text: Some("Clear the console view (the server's own log stays in data/server/logs)"),
                     connect_clicked => DashboardInput::ClearConsole,
                 },
 
@@ -232,6 +236,7 @@ impl Component for DashboardPage {
             pending_restart: false,
             restart_count: 0,
             orphan: false,
+            backup_in_flight: false,
             console,
             console_view: console_view.clone(),
         };
@@ -259,6 +264,13 @@ impl Component for DashboardPage {
                 }
                 if !self.ctx.state.borrow().ready_to_launch() {
                     self.append("[manager] Server is not installed or the EULA is not accepted — open Settings.\n");
+                    let _ = sender.output(DashboardOutput::OpenSettings);
+                    return;
+                }
+                if !self.ctx.state.borrow().budget().feasible {
+                    self.append(
+                        "[manager] The memory ceiling is too low to run a server — raise it in Settings.\n",
+                    );
                     let _ = sender.output(DashboardOutput::OpenSettings);
                     return;
                 }
@@ -354,6 +366,7 @@ impl Component for DashboardPage {
                 }
             }
             DashboardInput::BackupFinished { auto, result } => {
+                self.backup_in_flight = false;
                 let kind = if auto { "Auto-backup" } else { "Backup" };
                 match &result {
                     Ok(name) => self.append(&format!("[manager] {kind}: created {name}\n")),
@@ -467,7 +480,11 @@ impl Component for DashboardPage {
 
 impl DashboardPage {
     fn can_start(&self) -> bool {
-        self.control.is_none() && !self.orphan && self.ctx.state.borrow().ready_to_launch()
+        let state = self.ctx.state.borrow();
+        // An infeasible ceiling clamps the heap to zero, and `-Xmx0M` fails at
+        // launch with a raw JVM error. Refuse here instead — Settings already
+        // explains that the ceiling is too low.
+        self.control.is_none() && !self.orphan && state.ready_to_launch() && state.budget().feasible
     }
 
     fn is_active(&self) -> bool {
@@ -540,6 +557,18 @@ impl DashboardPage {
     /// straight from disk. Either way the outcome comes back as
     /// [`DashboardInput::BackupFinished`].
     fn run_backup(&mut self, auto: bool, sender: &ComponentSender<Self>) {
+        // `backup::create` documents that it is never run concurrently — it
+        // sweeps stray `.part` files on entry, so two overlapping runs would
+        // delete each other's scratch file, and same-second runs collide on the
+        // archive name. Nothing else serialises them: the manual button and the
+        // auto timer both land here and each spawns a detached task. This is
+        // the one place that starts a backup, so the guard belongs here.
+        if self.backup_in_flight {
+            self.append("[manager] A backup is already running — skipping this one.\n");
+            return;
+        }
+        self.backup_in_flight = true;
+
         let level = backup::level_name(&self.ctx.paths);
         let backup_dir = self.ctx.backup_dir();
         self.append(&format!(
@@ -600,6 +629,17 @@ impl DashboardPage {
                         }
                     };
 
+                    // The model drops its `Control` sender as soon as it sees
+                    // `Exited`, so `control_rx` closes while the event stream is
+                    // still draining its final Status/Log messages. A closed
+                    // `recv()` resolves instantly on every poll, so this branch
+                    // must be disabled rather than merely ignored — otherwise
+                    // `select!` picks it every iteration and the task spins a
+                    // core until `evt_rx` closes (which, if the cgroup outlives
+                    // the JVM, may be a long time). Breaking instead would drop
+                    // the handle and lose those last console lines.
+                    let mut control_open = true;
+
                     loop {
                         tokio::select! {
                             maybe_ev = evt_rx.recv() => match maybe_ev {
@@ -610,7 +650,7 @@ impl DashboardPage {
                                 }
                                 None => break,
                             },
-                            maybe_ctl = control_rx.recv() => match maybe_ctl {
+                            maybe_ctl = control_rx.recv(), if control_open => match maybe_ctl {
                                 Some(Control::Console(line)) => {
                                     let _ = handle.send_command(&line).await;
                                 }
@@ -624,7 +664,7 @@ impl DashboardPage {
                                         .map_err(|e| e.to_string());
                                     let _ = reply.send(r);
                                 }
-                                None => {}
+                                None => control_open = false,
                             },
                         }
                     }

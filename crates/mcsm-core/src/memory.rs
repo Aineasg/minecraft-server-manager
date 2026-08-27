@@ -193,6 +193,27 @@ mod tests {
         assert!(!b.feasible);
     }
 
+    /// An infeasible ceiling clamps the heap to zero, which would hand the JVM
+    /// `-Xms0M -Xmx0M` and fail at launch with an opaque message. Callers must
+    /// gate on `feasible` before starting a server, so pin the shape that makes
+    /// that necessary.
+    #[test]
+    fn an_infeasible_budget_produces_an_unusable_heap() {
+        let b = MemoryBudget::new(2048, Some(4096));
+        assert!(!b.feasible);
+        assert_eq!(b.xmx_mib, 0);
+        assert_eq!(b.xms_mib, 0);
+
+        let state = crate::state::AppState {
+            memory: crate::state::MemorySettings {
+                total_mib: 2048,
+                xmx_mib: None,
+            },
+            ..crate::state::AppState::default()
+        };
+        assert_eq!(state.jvm_args()[1], "-Xmx0M");
+    }
+
     #[test]
     fn a_generous_ceiling_scales_up() {
         let b = MemoryBudget::new(16 * 1024, None);

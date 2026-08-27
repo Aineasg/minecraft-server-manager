@@ -142,10 +142,13 @@ async fn ensure_cached(
 
 fn cache_is_valid(path: &Path, verify: Option<(&str, u64)>) -> bool {
     let Some((expected_sha1, expected_size)) = verify else {
-        // No checksum available (Fabric): treat a non-empty file as good enough.
+        // No checksum available (Fabric): accept only a non-empty file that
+        // actually begins with ZIP magic. An error page from a captive portal
+        // or proxy must not be cached forever as `fabric-server-launch.jar`.
         return std::fs::metadata(path)
             .map(|m| m.len() > 0)
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && starts_with_zip_magic(path);
     };
     let size_ok = std::fs::metadata(path)
         .map(|m| m.len() == expected_size)
@@ -156,10 +159,48 @@ fn cache_is_valid(path: &Path, verify: Option<(&str, u64)>) -> bool {
             .unwrap_or(false)
 }
 
+/// Whether the first four bytes of `path` are the ZIP local-file header
+/// (`PK\x03\x04`) — every jar is a zip, no jar is anything else.
+fn starts_with_zip_magic(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .map(|_| magic == [0x50, 0x4b, 0x03, 0x04])
+        .unwrap_or(false)
+}
+
 fn copy_into_place(from: &Path, to: &Path) -> Result<()> {
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
     }
     std::fs::copy(from, to).map_err(|e| Error::io(to, e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fabric_cache_entries_must_look_like_a_zip() {
+        let dir = std::env::temp_dir().join(format!("mcsm-install-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let html = dir.join("launcher.jar");
+        std::fs::write(&html, b"<html>captive portal</html>").unwrap();
+        assert!(!starts_with_zip_magic(&html));
+        assert!(!cache_is_valid(&html, None), "an error page must not pass");
+
+        let zip = dir.join("real.jar");
+        std::fs::write(&zip, b"PK\x03\x04 followed by real archive bytes").unwrap();
+        assert!(starts_with_zip_magic(&zip));
+        assert!(cache_is_valid(&zip, None));
+
+        let truncated = dir.join("tiny.jar");
+        std::fs::write(&truncated, b"PK").unwrap();
+        assert!(!starts_with_zip_magic(&truncated));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

@@ -117,11 +117,47 @@ impl AppState {
         let Some(text) = read_to_string_opt(path)? else {
             return Ok(Self::default());
         };
-        let state: Self = toml::from_str(&text).map_err(|source| Error::Toml {
+        let mut state: Self = toml::from_str(&text).map_err(|source| Error::Toml {
             path: path.to_path_buf(),
             source,
         })?;
+        state.migrate();
         Ok(state)
+    }
+
+    /// Bring a just-parsed state up to [`SCHEMA_VERSION`].
+    ///
+    /// Every field is `#[serde(default)]`, so a *new* field absent from an older
+    /// file is already filled in by the time we get here — no work needed for
+    /// the common "newer binary, older file" case. This is the single place to
+    /// handle a field **rename** or a change in how a value is interpreted,
+    /// keyed on the stored [`schema`](Self::schema): add one `if self.schema <
+    /// N` block per bump of [`SCHEMA_VERSION`].
+    ///
+    /// A file written by a *newer* build (`schema > SCHEMA_VERSION`, i.e. the
+    /// user downgraded) is kept and used as-is rather than rejected — locking
+    /// someone out of their own settings would be worse. Unknown keys were
+    /// already dropped by the parser, so re-saving will not preserve fields the
+    /// newer version added.
+    fn migrate(&mut self) {
+        // Snapshot the on-disk version first: the migration arms below branch on
+        // it, and the last line of this function overwrites `self.schema`.
+        let from = self.schema;
+
+        if from > SCHEMA_VERSION {
+            tracing::warn!(
+                file_schema = from,
+                supported = SCHEMA_VERSION,
+                "state.toml was written by a newer version; loading best-effort \
+                 and settings unknown to this build will be lost on the next save"
+            );
+        }
+
+        // No field renames yet. When SCHEMA_VERSION is bumped, add an arm here
+        // (they must test `from`, not `self.schema`):
+        //   if from < 2 { self.new_name = std::mem::take(&mut self.old_name); }
+
+        self.schema = SCHEMA_VERSION;
     }
 
     /// Persist to `path` atomically.
@@ -260,5 +296,38 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let s = AppState::load(&path).unwrap();
         assert_eq!(s.schema, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn old_file_is_stamped_to_current_schema_and_keeps_known_fields() {
+        let dir = std::env::temp_dir().join(format!("mcsm-migrate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.toml");
+        // schema 0, a real setting, and a key this build does not know.
+        std::fs::write(
+            &path,
+            "schema = 0\neula_accepted = true\nsome_removed_field = 42\n",
+        )
+        .unwrap();
+
+        let s = AppState::load(&path).unwrap();
+        assert_eq!(s.schema, SCHEMA_VERSION, "migrate() stamps the version");
+        assert!(s.eula_accepted, "recognised fields survive");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn newer_file_loads_best_effort_without_error() {
+        let dir = std::env::temp_dir().join(format!("mcsm-downgrade-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.toml");
+        std::fs::write(&path, "schema = 9999\nauto_backup_keep = 3\n").unwrap();
+
+        let s = AppState::load(&path).expect("a newer file must not be rejected");
+        assert_eq!(s.schema, SCHEMA_VERSION);
+        assert_eq!(s.auto_backup_keep, 3);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

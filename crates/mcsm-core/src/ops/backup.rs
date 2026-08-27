@@ -143,6 +143,15 @@ pub async fn create(
     let prefix = if auto { AUTO_PREFIX } else { MANUAL_PREFIX };
     let file_name = format!("{prefix}{}.tar.zst", format_compact_utc(SystemTime::now()));
     let archive = backup_dir.join(&file_name);
+    // Names are second-resolution, so a manual backup and the auto timer firing
+    // in the same second would otherwise silently overwrite each other (and the
+    // partial sweep above would eat the other run's scratch file). Refuse
+    // instead of destroying an archive.
+    if archive.exists() {
+        return Err(Error::msg(format!(
+            "a backup named {file_name} already exists — wait a second and try again"
+        )));
+    }
     let partial = archive.with_extension("zst.part");
 
     let mut cmd = Command::new("tar");
@@ -166,16 +175,84 @@ pub async fn create(
     })
 }
 
+/// The top-level directory names an archive contains, in listing order.
+///
+/// Used to check a backup against the current `level-name` before anything is
+/// moved. Shelling out to `tar -t` keeps this consistent with the extraction
+/// path, which uses the same `tar`.
+async fn archive_top_level_dirs(archive: &Path) -> Result<Vec<String>> {
+    let mut cmd = Command::new("tar");
+    cmd.arg("--zstd").arg("-tf").arg(archive);
+    let output = cmd.output().await.map_err(Error::IoBare)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::msg(format!(
+            "could not read the backup archive ({}): {}",
+            output.status,
+            stderr.trim()
+        )));
+    }
+    let mut names = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let top = line
+            .trim_start_matches("./")
+            .split('/')
+            .next()
+            .unwrap_or("");
+        if !top.is_empty() && !names.iter().any(|n| n == top) {
+            names.push(top.to_string());
+        }
+    }
+    Ok(names)
+}
+
 /// Restore a backup over the current world. **The server must be stopped.**
 ///
 /// The current world directories are moved aside to `<name>.pre-restore`
 /// (replacing any previous such copy) before extraction, so a bad restore is
 /// recoverable.
+///
+/// Refuses outright when the archive's world directory does not match the
+/// current `level-name`. Extracting a `myworld/` archive while `level-name` is
+/// `world` would move the live world aside, unpack a directory the server never
+/// looks at, and let it generate a fresh empty world — a silent loss that looks
+/// like a successful restore.
 pub async fn restore(paths: &Paths, backup: &BackupEntry, level_name: &str) -> Result<()> {
+    // A concurrent `create` is writing a `*.tar.zst.part` scratch file for its
+    // entire run; extracting over the world while it archives would produce a
+    // silently partial archive. The parts are swept at the start of every
+    // `create`, so a stray one here means "crashed run" — delete it by hand.
+    if let Some(dir) = backup.path.parent() {
+        let running = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .any(|e| e.file_name().to_string_lossy().ends_with(".tar.zst.part"))
+            })
+            .unwrap_or(false);
+        if running {
+            return Err(Error::msg(
+                "a backup appears to be in progress (found a *.tar.zst.part file) — \
+                 wait for it to finish before restoring",
+            ));
+        }
+    }
+
     if !backup.path.is_file() {
         return Err(Error::msg(format!(
             "backup {} is missing",
             backup.file_name
+        )));
+    }
+
+    let contents = archive_top_level_dirs(&backup.path).await?;
+    if !contents.iter().any(|name| name == level_name) {
+        return Err(Error::msg(format!(
+            "{} holds `{}`, but the current level-name is `{level_name}` — \
+             set level-name to `{}` in Properties (or rename the world) before restoring",
+            backup.file_name,
+            contents.join("`, `"),
+            contents.first().map_or("?", String::as_str),
         )));
     }
 
@@ -297,6 +374,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restore_refuses_an_archive_for_a_different_level_name() {
+        let root = std::env::temp_dir().join(format!(
+            "mcsm-bk-name-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = Paths::with_root(&root);
+        paths.ensure_dirs().unwrap();
+
+        // A backup taken while level-name was `oldworld`.
+        let region = paths.server.join("oldworld").join("region");
+        std::fs::create_dir_all(&region).unwrap();
+        std::fs::write(region.join("r.0.0.mca"), b"old chunks").unwrap();
+        let bdir = paths.backups.clone();
+        let entry = create(&paths, &bdir, "oldworld", false).await.unwrap();
+
+        // ...and a live world under the current level-name `world`.
+        let live = paths.server.join("world").join("region");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join("r.0.0.mca"), b"live chunks").unwrap();
+
+        let err = restore(&paths, &entry, "world").await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("oldworld"), "got: {msg}");
+        assert!(msg.contains("world"), "got: {msg}");
+
+        // The live world was not touched and nothing was stashed aside.
+        assert_eq!(
+            std::fs::read(live.join("r.0.0.mca")).unwrap(),
+            b"live chunks"
+        );
+        assert!(!paths.server.join("world.pre-restore").exists());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn create_refuses_to_overwrite_an_existing_archive() {
+        let root = std::env::temp_dir().join(format!(
+            "mcsm-bk-clash-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = Paths::with_root(&root);
+        paths.ensure_dirs().unwrap();
+        std::fs::create_dir_all(paths.server.join("world")).unwrap();
+        std::fs::write(paths.server.join("world").join("level.dat"), b"x").unwrap();
+
+        let bdir = paths.backups.clone();
+        let first = create(&paths, &bdir, "world", false).await.unwrap();
+        // Same second, same prefix => same name. Must not clobber the first.
+        std::fs::write(&first.path, b"pretend this is the real archive").unwrap();
+        if let Err(e) = create(&paths, &bdir, "world", false).await {
+            assert!(e.to_string().contains("already exists"), "got: {e}");
+            assert_eq!(
+                std::fs::read(&first.path).unwrap(),
+                b"pretend this is the real archive"
+            );
+        }
+        // If the clock ticked over into the next second the name differs and the
+        // second create legitimately succeeds; either way the first is intact.
+        assert!(first.path.is_file());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
     async fn create_sweeps_orphan_partials() {
         let root = std::env::temp_dir().join(format!(
             "mcsm-bk-part-{}-{}",
@@ -335,6 +485,36 @@ mod tests {
             leftover.is_empty(),
             "orphan partials not swept: {leftover:?}"
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_while_a_backup_is_in_progress() {
+        let root = std::env::temp_dir().join(format!(
+            "mcsm-bk-part-guard-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = Paths::with_root(&root);
+        paths.ensure_dirs().unwrap();
+        std::fs::create_dir_all(paths.server.join("world")).unwrap();
+
+        // Simulate a concurrently running `create` via its scratch file.
+        let bdir = paths.backups.clone();
+        std::fs::write(bdir.join("world-20260101-000000.tar.zst.part"), b"wip").unwrap();
+
+        let entry = BackupEntry {
+            path: bdir.join("world-20251231-000000.tar.zst"),
+            file_name: "world-20251231-000000.tar.zst".into(),
+            created: SystemTime::UNIX_EPOCH,
+            size_bytes: 0,
+        };
+        let err = restore(&paths, &entry, "world").await.unwrap_err();
+        assert!(err.to_string().contains("in progress"), "got: {err}");
 
         std::fs::remove_dir_all(&root).ok();
     }

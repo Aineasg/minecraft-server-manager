@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use adw::prelude::*;
 use mcsm_core::access::{
-    self, offline_uuid, parse_ip, AccessFile, BannedIp, BannedPlayer, OpEntry, WhitelistEntry,
+    self, offline_uuid, parse_ip, valid_player_name, AccessFile, BannedIp, BannedPlayer, OpEntry,
+    WhitelistEntry,
 };
 use mcsm_core::net::mojang;
 use mcsm_core::ops::server::scope_active;
@@ -55,6 +56,8 @@ pub enum AccessInput {
     },
     ResolveOnline,
     ResolvedUuids(Vec<(String, String)>),
+    /// “Resolve UUIDs online” was refused because the server is running.
+    ResolveBlocked(String),
 }
 
 #[derive(Debug)]
@@ -137,6 +140,7 @@ impl Component for AccessPage {
                     .map(|o| o.name.clone())
                     .chain(self.whitelist.iter().map(|w| w.name.clone()))
                     .chain(self.bans.iter().map(|b| b.name.clone()))
+                    .filter(|n| valid_player_name(n))
                     .collect();
                 if names.is_empty() {
                     return;
@@ -146,6 +150,17 @@ impl Component for AccessPage {
                 sender.command(move |out, shutdown| {
                     shutdown
                         .register(async move {
+                            // While the server runs it holds these JSON files
+                            // and rewrites them wholesale; direct edits here
+                            // would be silently thrown away. Refuse instead.
+                            if scope_active().await {
+                                let _ = out.send(AccessInput::ResolveBlocked(
+                                    "Stop the server before resolving UUIDs — \
+                                     while it runs the server rewrites these files."
+                                        .to_string(),
+                                ));
+                                return;
+                            }
                             let mut resolved = Vec::new();
                             for name in names {
                                 if let Ok(Some(uuid)) = mojang::lookup_uuid(&http, &name).await {
@@ -156,6 +171,9 @@ impl Component for AccessPage {
                         })
                         .drop_on_shutdown()
                 });
+            }
+            AccessInput::ResolveBlocked(reason) => {
+                self.status = reason;
             }
             AccessInput::ResolvedUuids(pairs) => {
                 for (name, uuid) in &pairs {
@@ -225,6 +243,22 @@ impl AccessPage {
                 return;
             }
         }
+        // Names become segments of *console commands* (`op {name}` …) — reject
+        // anything outside the vanilla grammar so a stray newline from an
+        // entry field can never inject a second command.
+        if let Some(name) = match &action {
+            AccessAction::AddOp(n) | AccessAction::AddWhitelist(n) | AccessAction::AddBan(n) => {
+                Some(n.trim())
+            }
+            _ => None,
+        } {
+            if !valid_player_name(name) {
+                self.status = format!(
+                    "`{name}` is not a valid player name (letters, digits and `_`, up to 16)"
+                );
+                return;
+            }
+        }
         sender.command(move |out, shutdown| {
             shutdown
                 .register(async move {
@@ -259,6 +293,10 @@ impl AccessPage {
     /// The console command for an action, using the *current* entry for removals.
     fn console_command(&self, action: &AccessAction) -> Option<String> {
         let trimmed = |s: &str| s.trim().to_string();
+        // Removal targets come from the on-disk JSON files; if one somehow does
+        // not pass validation, refuse to build a command from it rather than
+        // interpolate attacker-controlled bytes into the server console.
+        let trusted_name = |name: &str| valid_player_name(name).then(|| name.to_string());
         Some(match action {
             AccessAction::AddOp(n) if !n.trim().is_empty() => format!("op {}", trimmed(n)),
             AccessAction::AddWhitelist(n) if !n.trim().is_empty() => {
@@ -266,12 +304,17 @@ impl AccessPage {
             }
             AccessAction::AddBan(n) if !n.trim().is_empty() => format!("ban {}", trimmed(n)),
             AccessAction::AddIpBan(ip) => format!("ban-ip {}", parse_ip(ip).ok()?),
-            AccessAction::Remove(AccessFile::Ops, i) => format!("deop {}", self.ops.get(*i)?.name),
+            AccessAction::Remove(AccessFile::Ops, i) => {
+                format!("deop {}", trusted_name(&self.ops.get(*i)?.name)?)
+            }
             AccessAction::Remove(AccessFile::Whitelist, i) => {
-                format!("whitelist remove {}", self.whitelist.get(*i)?.name)
+                format!(
+                    "whitelist remove {}",
+                    trusted_name(&self.whitelist.get(*i)?.name)?
+                )
             }
             AccessAction::Remove(AccessFile::BannedPlayers, i) => {
-                format!("pardon {}", self.bans.get(*i)?.name)
+                format!("pardon {}", trusted_name(&self.bans.get(*i)?.name)?)
             }
             AccessAction::Remove(AccessFile::BannedIps, i) => {
                 format!("pardon-ip {}", self.ip_bans.get(*i)?.ip)

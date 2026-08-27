@@ -62,10 +62,21 @@ fn read_settings(root: &Value) -> Result<WorldSettings> {
     let Some(Value::Compound(data)) = map.get("Data") else {
         return Err(Error::msg("level.dat has no `Data` compound"));
     };
+    // A world generated before the Difficulty tag existed reports *nothing*.
+    // Defaulting it to 0 (peaceful) and writing that back would silently
+    // defang the world on the next hardcore/difficulty edit, so a missing tag
+    // means "normal" — the server's own default for new worlds.
+    let difficulty = match byte(data, "Difficulty") {
+        Some(v) => v.clamp(0, 3) as u8,
+        None => {
+            tracing::warn!("level.dat has no Difficulty tag; treating as normal (2)");
+            2
+        }
+    };
     Ok(WorldSettings {
-        hardcore: byte(data, "hardcore") != 0,
-        difficulty: byte(data, "Difficulty").clamp(0, 3) as u8,
-        difficulty_locked: byte(data, "DifficultyLocked") != 0,
+        hardcore: byte(data, "hardcore").unwrap_or(0) != 0,
+        difficulty,
+        difficulty_locked: byte(data, "DifficultyLocked").unwrap_or(0) != 0,
     })
 }
 
@@ -170,12 +181,12 @@ fn gzip(data: &[u8]) -> Result<Vec<u8>> {
     encoder.finish().map_err(Error::IoBare)
 }
 
-fn byte(map: &std::collections::HashMap<String, Value>, key: &str) -> i64 {
+fn byte(map: &std::collections::HashMap<String, Value>, key: &str) -> Option<i64> {
     match map.get(key) {
-        Some(Value::Byte(b)) => i64::from(*b),
-        Some(Value::Short(s)) => i64::from(*s),
-        Some(Value::Int(i)) => i64::from(*i),
-        _ => 0,
+        Some(Value::Byte(b)) => Some(i64::from(*b)),
+        Some(Value::Short(s)) => Some(i64::from(*s)),
+        Some(Value::Int(i)) => Some(i64::from(*i)),
+        _ => None,
     }
 }
 
@@ -374,6 +385,30 @@ mod tests {
         );
         assert_eq!(read(&paths, "world").unwrap().unwrap(), target);
         assert!(world.join("level.dat.bak").is_file());
+        std::fs::remove_dir_all(&paths.root).ok();
+    }
+
+    /// A legacy `level.dat` with no Difficulty/hardcore tags must not read
+    /// back as "peaceful, hardcore-off" in a way a later write would persist:
+    /// the absent difficulty defaults to normal instead.
+    #[test]
+    fn missing_difficulty_tag_defaults_to_normal() {
+        let paths = temp_paths();
+        let dir = paths.server.join("legacy");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut data = HashMap::new();
+        data.insert("LevelName".to_string(), Value::String("legacy".into()));
+        let mut root = HashMap::new();
+        root.insert("Data".to_string(), Value::Compound(data));
+        let nbt = fastnbt::to_bytes(&Value::Compound(root)).unwrap();
+        std::fs::write(dir.join("level.dat"), gzip(&nbt).unwrap()).unwrap();
+
+        let settings = read(&paths, "legacy").unwrap().unwrap();
+        assert!(!settings.hardcore);
+        assert_eq!(settings.difficulty, 2);
+        assert!(!settings.difficulty_locked);
+
         std::fs::remove_dir_all(&paths.root).ok();
     }
 
