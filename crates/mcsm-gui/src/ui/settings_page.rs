@@ -269,7 +269,7 @@ impl Component for SettingsPage {
                 },
                 adw::ActionRow {
                     set_title: "Source",
-                    set_subtitle: "https://github.com/aineasg/minecraft-server-manager",
+                    set_subtitle: "https://github.com/Aineasg/minecraft-server-manager",
                 },
                 adw::ActionRow {
                     set_title: "Licence — GNU Affero GPL v3 or later",

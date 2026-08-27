@@ -4,7 +4,7 @@
 
 # 🐧 Linux Minecraft Server Manager
 
-[![CI](https://github.com/aineasg/minecraft-server-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/aineasg/minecraft-server-manager/actions/workflows/ci.yml)
+[![CI](https://github.com/Aineasg/minecraft-server-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/Aineasg/minecraft-server-manager/actions/workflows/ci.yml)
 [![Licence: AGPL-3.0-or-later](https://img.shields.io/badge/licence-AGPL--3.0--or--later-blue.svg)](LICENSE)
 
 </div>
@@ -36,7 +36,7 @@ This tool is built in **Rust** for maximum performance and memory safety.
 It's as simple as it gets. Clone the repo and run:
 
 ```bash
-git clone https://github.com/aineasg/minecraft-server-manager
+git clone https://github.com/Aineasg/minecraft-server-manager
 cd minecraft-server-manager
 ./install.sh
 ```
@@ -134,7 +134,7 @@ Run `MCSM_LOG=debug mcsm` if you want verbose logs.
 
 **Want Purpur, Spigot, or Paper?** I play daily, so this gets regular updates
 based on real use. If you need another loader,
-[open an issue](https://github.com/aineasg/minecraft-server-manager/issues) and
+[open an issue](https://github.com/Aineasg/minecraft-server-manager/issues) and
 ask — I'll add it.
 
 ## 🛠️ Hacking on it

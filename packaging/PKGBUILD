@@ -1,10 +1,10 @@
-# Maintainer: Aineasg <https://github.com/aineasg/minecraft-server-manager>
+# Maintainer: Aineasg <https://github.com/Aineasg/minecraft-server-manager>
 pkgname=minecraft-server-manager
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Native GTK4/libadwaita desktop app to run and manage a Fabric Minecraft server"
 arch=('x86_64' 'aarch64')
-url="https://github.com/aineasg/minecraft-server-manager"
+url="https://github.com/Aineasg/minecraft-server-manager"
 license=('AGPL-3.0-or-later')
 depends=('gtk4' 'libadwaita' 'openssl' 'zstd' 'tar')
 optdepends=('jre-openjdk: run the Minecraft server (Java 21 or newer)'

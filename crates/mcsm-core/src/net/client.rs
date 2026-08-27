@@ -15,9 +15,9 @@ use crate::error::{Error, Result};
 
 /// `User-Agent` sent with every request.
 pub const USER_AGENT: &str = concat!(
-    "aineasg/minecraft-server-manager/",
+    "Aineasg/minecraft-server-manager/",
     env!("CARGO_PKG_VERSION"),
-    " (github.com/aineasg/minecraft-server-manager)"
+    " (github.com/Aineasg/minecraft-server-manager)"
 );
 
 const RETRY_DELAYS: [Duration; 3] = [
