@@ -1,4 +1,4 @@
-# Maintainer: Your Name <your.email@example.com>
+# Maintainer: Aineasg <https://github.com/aineasg/minecraft-server-manager>
 pkgname=minecraft-server-manager
 pkgver=0.1.0
 pkgrel=1
