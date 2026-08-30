@@ -174,9 +174,9 @@ impl Component for BackupsPage {
                 self.pending_delete = None;
                 if self.pending_restore != Some(idx) {
                     self.pending_restore = Some(idx);
-                    self.status =
-                        "Click Restore again to confirm — this replaces the current world."
-                            .to_string();
+                    self.status = "Stop the server first. Click Restore again to confirm — \
+                         this replaces the current world."
+                        .to_string();
                     self.rebuild(&sender);
                     return;
                 }

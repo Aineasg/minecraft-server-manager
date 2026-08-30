@@ -46,6 +46,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 fastnbt = "2"
 flate2 = "1"
 dirs = "6"
+# Safe wrappers over `flock(2)` etc. — used to tell whether a Minecraft server
+# still holds a world's `session.lock` before a restore overwrites it. Already
+# in the tree transitively; this is a direct edge, not a new build cost.
+rustix = { version = "1", features = ["fs"] }
 
 # GTK is unusably slow when built without optimisation, and our own crates are
 # small, so optimise every dependency even in debug builds.

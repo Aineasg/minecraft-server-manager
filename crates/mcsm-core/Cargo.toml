@@ -31,6 +31,7 @@ zip.workspace = true
 fastnbt.workspace = true
 flate2.workspace = true
 dirs.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

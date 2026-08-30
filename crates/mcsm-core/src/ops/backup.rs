@@ -206,6 +206,53 @@ async fn archive_top_level_dirs(archive: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// Whether a running server still holds one of the world's `session.lock`
+/// files.
+///
+/// Every Minecraft server — vanilla, Fabric, Paper, and no matter how it was
+/// launched — takes an exclusive `flock` on `<level>/session.lock` for its
+/// whole run and only drops it on shutdown. Trying and failing to take that
+/// lock ourselves is the one check that also catches a server this app did not
+/// start: the no-systemd fallback where the JVM is a bare child process, or one
+/// the user launched by hand. The systemd-scope check only sees servers we
+/// started.
+///
+/// A missing lock file (or any error opening it) counts as "not locked": this
+/// is a guard layered on top of the scope check, and a world that simply has no
+/// `session.lock` yet must still be restorable.
+#[cfg(unix)]
+fn world_session_in_use(server_dir: &Path, level_name: &str) -> bool {
+    use rustix::fs::{flock, FlockOperation};
+
+    for name in world_dirs(server_dir, level_name) {
+        let lock_path = server_dir.join(&name).join("session.lock");
+        let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+        else {
+            continue;
+        };
+        match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+            // We took the lock, so nobody else holds it — release it again.
+            Ok(()) => {
+                let _ = flock(&file, FlockOperation::Unlock);
+            }
+            // Held by a live server.
+            Err(rustix::io::Errno::WOULDBLOCK) => return true,
+            // Anything else (permissions, unsupported FS): don't block on a
+            // signal we can't read.
+            Err(_) => continue,
+        }
+    }
+    false
+}
+
+#[cfg(not(unix))]
+fn world_session_in_use(_server_dir: &Path, _level_name: &str) -> bool {
+    false
+}
+
 /// Restore a backup over the current world. **The server must be stopped.**
 ///
 /// The current world directories are moved aside to `<name>.pre-restore`
@@ -218,6 +265,20 @@ async fn archive_top_level_dirs(archive: &Path) -> Result<Vec<String>> {
 /// looks at, and let it generate a fresh empty world — a silent loss that looks
 /// like a successful restore.
 pub async fn restore(paths: &Paths, backup: &BackupEntry, level_name: &str) -> Result<()> {
+    // Hard stop: never extract over a world a server still has open. Doing so
+    // leaves the JVM writing region/entity/playerdata files to inodes that no
+    // longer match what is on disk, and the mismatch survives a restart — it
+    // shows up in-game as missing item models, broken villager trades and
+    // desynced durability, not as an obvious crash. The systemd-scope check in
+    // the caller misses a bare-JVM fallback or a hand-started server; this one
+    // does not.
+    if world_session_in_use(&paths.server, level_name) {
+        return Err(Error::msg(
+            "the world is still in use by a running Minecraft server — stop the \
+             server and wait for it to fully exit before restoring a backup",
+        ));
+    }
+
     // A concurrent `create` is writing a `*.tar.zst.part` scratch file for its
     // entire run; extracting over the world while it archives would produce a
     // silently partial archive. The parts are swept at the start of every
@@ -515,6 +576,57 @@ mod tests {
         };
         let err = restore(&paths, &entry, "world").await.unwrap_err();
         assert!(err.to_string().contains("in progress"), "got: {err}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn restore_refuses_while_a_server_holds_session_lock() {
+        use rustix::fs::{flock, FlockOperation};
+
+        let root = std::env::temp_dir().join(format!(
+            "mcsm-bk-session-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let paths = Paths::with_root(&root);
+        paths.ensure_dirs().unwrap();
+
+        // A live world with a backup to restore from.
+        let region = paths.server.join("world").join("region");
+        std::fs::create_dir_all(&region).unwrap();
+        std::fs::write(region.join("r.0.0.mca"), b"live chunks").unwrap();
+        let bdir = paths.backups.clone();
+        let entry = create(&paths, &bdir, "world", false).await.unwrap();
+
+        // Simulate a running server: hold an exclusive lock on session.lock.
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(paths.server.join("world").join("session.lock"))
+            .unwrap();
+        flock(&lock, FlockOperation::NonBlockingLockExclusive).unwrap();
+
+        let err = restore(&paths, &entry, "world").await.unwrap_err();
+        assert!(err.to_string().contains("still in use"), "got: {err}");
+        // The live world was left untouched.
+        assert_eq!(
+            std::fs::read(region.join("r.0.0.mca")).unwrap(),
+            b"live chunks"
+        );
+        assert!(!paths.server.join("world.pre-restore").exists());
+
+        // Server exits -> lock released -> restore now goes through.
+        flock(&lock, FlockOperation::Unlock).unwrap();
+        drop(lock);
+        restore(&paths, &entry, "world").await.unwrap();
+        assert!(paths.server.join("world.pre-restore").is_dir());
 
         std::fs::remove_dir_all(&root).ok();
     }

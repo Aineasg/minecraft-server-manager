@@ -1123,6 +1123,7 @@ dependencies = [
  "hex",
  "md-5",
  "reqwest",
+ "rustix",
  "serde",
  "serde_json",
  "sha1",
