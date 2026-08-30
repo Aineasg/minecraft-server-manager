@@ -7,7 +7,7 @@ Thanks for taking a look. This is a small project — issues and PRs are welcome
 ```sh
 git clone https://github.com/Aineasg/minecraft-server-manager
 cd minecraft-server-manager
-./install.sh --skip-deps    # or just: cargo run -p mcsm-gui
+./install.sh    # or just: cargo run -p mcsm-gui
 ```
 
 You need GTK 4 + libadwaita development files, `pkg-config`, OpenSSL headers,
